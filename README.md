@@ -5,7 +5,63 @@
 
 Команда: **Войтивайти**
 
+___
+
+- **Козлов Денис** — Backend, DevOps, ML
+- **Аношин Антон** — Backend, ML
+- **Кутырин Максим** — Frontend
+
+Связь: **Telegram: Антон | @restupkolpp**
+
+---
+
+Стек: Vue 3 + Vite + TensorFlow.js
+
 [![Made with ❤️ for Hackathon](https://img.shields.io/badge/Made%20for-Hackathon-ff69b4.svg)]()
+[![Made with Vue](https://img.shields.io/badge/Made%20with-Vue.js-42b883)](https://vuejs.org/)
+[![TensorFlow.js](https://img.shields.io/badge/TensorFlow.js-ML-orange)](https://www.tensorflow.org/js)
+
+---
+
+## Старт со сборкой из исходного кода
+
+### Установка зависимостей
+
+```bash
+npm install
+```
+
+### Запуск dev-сервера
+
+```bash
+npm run dev
+```
+
+Откроется на **http://localhost:3000**
+
+### Сборка статики
+
+```bash
+npm run build
+```
+
+Статические файлы будут в папке `dist/`
+
+### Просмотр сборки
+
+```bash
+npm run preview
+```
+
+Результат в `dist/`:
+```
+dist/
+├── index.html
+├── assets/
+│   ├── index-[hash].js      # Код приложения
+│   ├── vendor-[hash].js     # Vue
+│   └── ml-[hash].js         # TensorFlow.js + BodyPix
+```
 
 ---
 
@@ -18,27 +74,7 @@
 - **Сегментация человека в видео** (real-time, устойчивость к освещению и движению)
 - **Локальный inference** на CPU/GPU
 - Плагины фонов: статический цвет, размытие, изображение
-- Профили: «Работа», «Учёба», «Стриминг», «Интервью»
-
-___
-
-## **Старт**
-1) .
-2) .
-
-___
-## **Команда**
-- **Козлов Денис** — Backend, DevOps, ML
-- **Аношин Антон** — Backend, ML
-- **Кутырин Максим** — Frontend
-
-Связь: **Telegram: Антон | @restupkolpp**
-
----
-
-## **Модели (опции):**
-
--
+- Шаблоны пользовательских фонов по категориям
 
 ___
 ## Производительность (заготовка)
@@ -49,5 +85,3 @@ ___
 | Quality          | GPU        | 1080p      | XX         | TODO       |
 
 > Заполнить цифры после измерений на целевом железе.
-
----
