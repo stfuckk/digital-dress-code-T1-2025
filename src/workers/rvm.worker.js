@@ -1,6 +1,5 @@
 import { env, InferenceSession, Tensor } from "onnxruntime-web";
 
-// Настройка WASM
 env.wasm.wasmPaths =
   "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.0/dist/";
 env.wasm.simd = true;
@@ -14,7 +13,7 @@ let r1 = null,
   r3 = null,
   r4 = null;
 
-function imageBitmapToTensor(bitmap, useFloat16 = false) {
+function imageBitmapToTensor(bitmap) {
   const width = bitmap.width;
   const height = bitmap.height;
 
@@ -26,8 +25,6 @@ function imageBitmapToTensor(bitmap, useFloat16 = false) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const pixels = imageData.data;
 
-  // Используем Float32Array, так как Float16Array не поддерживается напрямую в JS
-  // ONNX Runtime сам преобразует в float16 если нужно
   const tensorData = new Float32Array(1 * 3 * height * width);
 
   let rOffset = 0;
@@ -40,8 +37,6 @@ function imageBitmapToTensor(bitmap, useFloat16 = false) {
     tensorData[gOffset++] = pixels[p + 1] / 255.0;
     tensorData[bOffset++] = pixels[p + 2] / 255.0;
   }
-
-  // Для FP16 модели ONNX Runtime автоматически конвертирует float32 в float16
   return new Tensor("float32", tensorData, [1, 3, height, width]);
 }
 
@@ -55,49 +50,27 @@ self.onmessage = async (e) => {
       env.wasm.numThreads = self.crossOriginIsolated ? wantThreads : 1;
 
       try {
-        // Загружаем локальную модель
-        const modelUrl = msg.modelUrl || "/models/rvm_resnet50_fp16.onnx";
-
-        self.postMessage({
-          type: "status",
-          message: "Загрузка модели...",
-        });
-
-        const response = await fetch(modelUrl);
-        if (!response.ok) {
+        // Загрузка модели
+        const resp = await fetch(msg.modelUrl, { credentials: "same-origin" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+        const buf = await resp.arrayBuffer();
+        if (buf.byteLength < 100 * 1024) {
+          const head = new TextDecoder().decode(
+            new Uint8Array(buf).slice(0, 200),
+          );
           throw new Error(
-            `Не удалось загрузить модель: HTTP ${response.status}`,
+            `Файл слишком мал (${buf.byteLength} B). Похоже не ONNX: ${head}`,
           );
         }
 
-        const modelBuffer = await response.arrayBuffer();
-
-        // Проверяем размер
-        if (modelBuffer.byteLength < 10 * 1024 * 1024) {
-          throw new Error(
-            `Модель слишком мала (${modelBuffer.byteLength} bytes). Возможно, файл поврежден.`,
-          );
-        }
-
-        self.postMessage({
-          type: "status",
-          message: "Инициализация модели...",
-        });
-
-        // Создаем сессию с правильными настройками для FP16
-        session = await InferenceSession.create(modelBuffer, {
+        session = await InferenceSession.create(buf, {
           executionProviders: ["wasm"],
           graphOptimizationLevel: "all",
-          // Добавляем опции для работы с FP16
-          enableCpuMemArena: true,
-          enableMemPattern: true,
         });
-
-        console.log("Модель успешно инициализирована");
       } catch (e2) {
         self.postMessage({
           type: "error",
-          message: `Ошибка загрузки модели: ${e2.message || e2}`,
+          message: `Не удалось загрузить модель ${msg.modelUrl}: ${e2.message || e2}`,
         });
         return;
       }
@@ -123,13 +96,10 @@ self.onmessage = async (e) => {
 
       const t0 = performance.now();
 
-      // Преобразуем изображение в тензор
-      const srcTensor = imageBitmapToTensor(msg.bitmap, true);
+      const srcTensor = imageBitmapToTensor(msg.bitmap);
 
       // Начальные состояния для RVM
-      // Используем правильные размеры для начальных состояний
-      const initStateSize = 1;
-      const z = new Float32Array(initStateSize);
+      const z = new Float32Array(1);
       const zShape = [1, 1, 1, 1];
 
       const feeds = {
@@ -146,8 +116,6 @@ self.onmessage = async (e) => {
       };
 
       const outputs = await session.run(feeds);
-
-      // Сохраняем состояния для следующего кадра
       r1 = outputs.r1o;
       r2 = outputs.r2o;
       r3 = outputs.r3o;
@@ -157,12 +125,7 @@ self.onmessage = async (e) => {
       const t1 = performance.now();
 
       self.postMessage(
-        {
-          type: "result",
-          pha: pha.data,
-          shape: pha.dims,
-          timeMs: t1 - t0,
-        },
+        { type: "result", pha: pha.data, shape: pha.dims, timeMs: t1 - t0 },
         [pha.data.buffer],
       );
 
@@ -170,10 +133,7 @@ self.onmessage = async (e) => {
       return;
     }
   } catch (error) {
-    self.postMessage({
-      type: "error",
-      message: `Worker error: ${error.message || error}`,
-    });
+    self.postMessage({ type: "error", message: `Worker error: ${error}` });
     console.error("Worker error:", error);
   }
 };

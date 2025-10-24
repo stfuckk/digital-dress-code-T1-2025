@@ -29,7 +29,7 @@ export function useBackgroundReplacement(
     if (isInitialized) return;
 
     try {
-      console.log("Инициализация RVM модели...");
+      console.log("Загрузка RVM модели...");
 
       // Создаем воркер
       worker = createWorker();
@@ -37,11 +37,6 @@ export function useBackgroundReplacement(
       // Настройка обработчиков сообщений от воркера
       worker.onmessage = (e) => {
         const msg = e.data;
-
-        if (msg.type === "status") {
-          console.log("Статус:", msg.message);
-          return;
-        }
 
         if (msg.type === "ready") {
           isReady = true;
@@ -55,15 +50,7 @@ export function useBackgroundReplacement(
 
         if (msg.type === "error") {
           console.error("Worker error:", msg.message);
-          if (stats.value) {
-            stats.value.error = msg.message;
-          }
-          // Показываем пользователю что модель не найдена
-          if (msg.message.includes("Не удалось загрузить модель")) {
-            alert(
-              "Модель не найдена! Пожалуйста, загрузите модель с помощью: npm run download-models",
-            );
-          }
+          stats.value.error = msg.message;
           return;
         }
 
@@ -86,16 +73,19 @@ export function useBackgroundReplacement(
       };
 
       // Инициализация модели
+      // URL модели - нужно скачать с GitHub
+      const modelUrl = "/models/rvm_mobilenetv3_fp32.onnx";
+
       worker.postMessage({
         type: "init",
-        modelUrl: "/models/rvm_resnet50_fp16.onnx",
+        modelUrl,
         downsample,
         threads,
       });
 
       isInitialized = true;
     } catch (error) {
-      console.error("Ошибка инициализации:", error);
+      console.error("Ошибка загрузки модели:", error);
       throw error;
     }
   };
