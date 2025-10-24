@@ -1,68 +1,147 @@
 <template>
-    <div class="full-interface">
-        <header class="header">
+    <div class="full-interface mono">
+        <header class="header mono-surface">
             <h1>Цифровой дресс-код</h1>
-            <button @click="$emit('toggle-mode')" class="presentation-btn">
-                Режим презентации
-            </button>
+            <div class="header-year">@2025</div>
         </header>
 
         <div class="content">
-            <div class="controls-panel">
+            <aside class="controls-panel">
                 <div class="control-group">
                     <h3>Информация о пользователе</h3>
-                    <input
-                        v-model="userInfo.name"
-                        placeholder="ФИО"
-                        class="input"
-                    />
-                    <input
-                        v-model="userInfo.position"
-                        placeholder="Должность"
-                        class="input"
-                    />
-                    <input
-                        v-model="userInfo.company"
-                        placeholder="Компания"
-                        class="input"
-                    />
+
+                    <div class="form-grid">
+                        <div class="col-span-2">
+                            <label class="label">Полное имя</label>
+                            <input v-model="fullNameC" class="input-field" />
+                        </div>
+                        <div>
+                            <label class="label">Должность</label>
+                            <input v-model="positionC" class="input-field" />
+                        </div>
+                        <div>
+                            <label class="label">Компания</label>
+                            <input v-model="companyC" class="input-field" />
+                        </div>
+                        <div class="col-span-2">
+                            <label class="label">Подразделение</label>
+                            <input v-model="departmentC" class="input-field" />
+                        </div>
+                        <div class="col-span-2">
+                            <label class="label">Локация офиса</label>
+                            <input v-model="officeC" class="input-field" />
+                        </div>
+                        <div>
+                            <label class="label">Email</label>
+                            <input
+                                v-model="employee.contact.email"
+                                class="input-field"
+                                type="email"
+                            />
+                        </div>
+                        <div>
+                            <label class="label">Telegram</label>
+                            <input
+                                v-model="employee.contact.telegram"
+                                class="input-field"
+                            />
+                        </div>
+                        <div class="col-span-2">
+                            <label class="label">Слоган</label>
+                            <input v-model="sloganC" class="input-field" />
+                        </div>
+                        <div>
+                            <label class="label">Уровень приватности</label>
+                            <select
+                                v-model="privacyLevel"
+                                class="select-field privacy-select"
+                            >
+                                <option value="low">Низкий</option>
+                                <option value="medium">Средний</option>
+                                <option value="high">Высокий</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="control-group">
                     <h3>Настройки фона</h3>
-                    <select v-model="backgroundConfig.type" class="select">
-                        <option value="blur">Размытие</option>
-                        <option value="color">Цвет</option>
-                        <option value="none">Без фона</option>
-                    </select>
 
-                    <div
-                        v-if="backgroundConfig.type === 'blur'"
-                        class="slider-group"
-                    >
-                        <label
+                    <div class="radio-row">
+                        <label class="radio"
+                            ><input
+                                type="radio"
+                                value="blur"
+                                v-model="backgroundConfig.type"
+                            />
+                            Размытие</label
+                        >
+                        <label class="radio"
+                            ><input
+                                type="radio"
+                                value="color"
+                                v-model="backgroundConfig.type"
+                            />
+                            Цвет</label
+                        >
+                        <label class="radio"
+                            ><input
+                                type="radio"
+                                value="photo"
+                                v-model="backgroundConfig.type"
+                            />
+                            Фото</label
+                        >
+                    </div>
+
+                    <div v-if="backgroundConfig.type === 'blur'">
+                        <label class="label"
                             >Сила размытия:
                             {{ backgroundConfig.blurAmount }}px</label
                         >
                         <input
-                            v-model.number="backgroundConfig.blurAmount"
                             type="range"
                             min="0"
-                            max="50"
-                            class="slider"
+                            max="40"
+                            v-model.number="backgroundConfig.blurAmount"
+                            class="range"
                         />
                     </div>
 
-                    <div
-                        v-if="backgroundConfig.type === 'color'"
-                        class="color-group"
-                    >
-                        <label>Цвет фона</label>
-                        <input
-                            v-model="backgroundConfig.color"
-                            type="color"
-                            class="color-picker"
-                        />
+                    <div v-if="backgroundConfig.type === 'color'">
+                        <label class="label">Цвет</label>
+                        <div class="color-row">
+                            <input
+                                type="color"
+                                v-model="backgroundConfig.color"
+                                class="color-picker"
+                            />
+                            <span class="color-code">{{
+                                backgroundConfig.color
+                            }}</span>
+                        </div>
+                    </div>
+
+                    <div v-if="backgroundConfig.type === 'photo'">
+                        <label class="label">Фотографии</label>
+                        <div class="carousel">
+                            <button
+                                v-for="(img, i) in images"
+                                :key="img + i"
+                                type="button"
+                                class="thumb"
+                                :class="{
+                                    active: img === backgroundConfig.photo,
+                                }"
+                                @click="selectPhoto(img)"
+                                title="Выбрать фон"
+                            >
+                                <img :src="img" alt="bg" />
+                            </button>
+                        </div>
+                        <div class="hint" v-if="backgroundConfig.photo">
+                            Выбрано: {{ backgroundConfig.photo }}
+                        </div>
                     </div>
 
                     <label class="checkbox">
@@ -72,13 +151,13 @@
                 </div>
 
                 <div class="control-group">
-                    <h3>⚡ Пресеты</h3>
+                    <h3>Пресеты</h3>
                     <div class="presets">
                         <button
                             v-for="preset in presets"
                             :key="preset.id"
-                            @click="applyPreset(preset)"
                             class="preset-btn"
+                            @click="applyPreset(preset)"
                         >
                             {{ preset.icon }} {{ preset.name }}
                         </button>
@@ -96,294 +175,390 @@
                         {{ isRunning ? "Остановить" : "Запустить" }}
                     </button>
                 </div>
-            </div>
+            </aside>
 
-            <div class="video-panel">
+            <section class="video-panel">
                 <VideoCanvas
                     ref="videoCanvas"
-                    :user-info="userInfo"
+                    :user-info="{
+                        name: humanize(employee.full_name),
+                        position:
+                            privacyLevel === 'high'
+                                ? ''
+                                : humanize(employee.position),
+                        company: humanize(employee.company),
+                    }"
                     :background-enabled="backgroundEnabled"
                     :background-config="backgroundConfig"
                     :show-stats="true"
                     @ready="onReady"
                 />
-            </div>
+            </section>
         </div>
     </div>
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import VideoCanvas from "./VideoCanvas.vue";
-
-defineEmits(["toggle-mode"]);
 
 const videoCanvas = ref(null);
 const isRunning = ref(false);
 const backgroundEnabled = ref(true);
 
-const userInfo = ref({
-    name: "Кутырин Максим Алексеевич",
-    position: "Frontend Developer",
-    company: "Hackathon Team",
+// Employee info per JSON + privacy
+const employee = ref({
+    full_name: "ИвановСергейПетрович",
+    position: "Ведущийинженерпокомпьютерномузрению",
+    company: "ООО«РогаиКопыта»",
+    department: "Департаменткомпьютерногозрения",
+    office_location: "Новосибирск,технопарк«Идея»",
+    contact: { email: "sergey.ivanov@t1dp.ru", telegram: "@sergey_vision" },
+    branding: { slogan: "Инновациивкаждыйкадр" },
+});
+const privacyLevel = ref("medium");
+
+// humanize helpers via computed
+function humanize(s = "") {
+    let x = s.replaceAll(",", ", ");
+    x = x
+        .replace(/([А-Яа-яЁё])([А-ЯЁ])/g, "$1 $2")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    return x;
+}
+const fullNameC = computed({
+    get: () => humanize(employee.value.full_name),
+    set: (v) => (employee.value.full_name = humanize(v ?? "")),
+});
+const positionC = computed({
+    get: () => humanize(employee.value.position),
+    set: (v) => (employee.value.position = humanize(v ?? "")),
+});
+const companyC = computed({
+    get: () => humanize(employee.value.company),
+    set: (v) => (employee.value.company = humanize(v ?? "")),
+});
+const departmentC = computed({
+    get: () => humanize(employee.value.department),
+    set: (v) => (employee.value.department = humanize(v ?? "")),
+});
+const officeC = computed({
+    get: () => humanize(employee.value.office_location),
+    set: (v) => (employee.value.office_location = humanize(v ?? "")),
+});
+const sloganC = computed({
+    get: () => humanize(employee.value.branding.slogan),
+    set: (v) => (employee.value.branding.slogan = humanize(v ?? "")),
 });
 
+const selectPhoto = (img) => {
+    // Всегда явно переключаемся в режим "photo"
+    backgroundConfig.value.type = "photo";
+    backgroundConfig.value.photo = img;
+};
+
+// Background config with new 'photo' type
 const backgroundConfig = ref({
     type: "blur",
     blurAmount: 15,
-    color: "#00ff00",
+    color: "#2e2e2e",
+    photo: null,
 });
+
+const imageCandidates = [
+    "images/office.png",
+    "images/home.png",
+    "images/bg1.jpg",
+    "images/bg2.jpg",
+    "images/bg3.jpg",
+    "images/bg1.png",
+    "images/bg2.png",
+    "images/bg3.png",
+];
+const images = ref([]);
+function probeImages() {
+    images.value = [];
+    imageCandidates.forEach((src) => {
+        const img = new Image();
+        img.onload = () => {
+            if (!images.value.includes(src)) images.value.push(src);
+            // НЕ перезаписываем, если уже выбрано
+            if (
+                backgroundConfig.value.type === "photo" &&
+                !backgroundConfig.value.photo
+            ) {
+                backgroundConfig.value.photo = src;
+            }
+        };
+        img.onerror = () => {};
+        img.src = src;
+    });
+}
+onMounted(probeImages);
+
+// default first image when switching to photo
+watch(
+    () => backgroundConfig.value.type,
+    (t) => {
+        if (t === "photo" && !backgroundConfig.value.photo) {
+            backgroundConfig.value.photo = images.value[0] || null;
+        }
+    },
+);
 
 const presets = [
     {
-        id: "work",
-        name: "Работа",
-        icon: "💼",
-        config: { type: "blur", blurAmount: 25 },
+        id: "customer",
+        name: "Встреча с заказчиком",
+        icon: "🤝",
+        config: { type: "photo", photo: "images/office.png" },
+        privacy: "high",
     },
     {
-        id: "interview",
-        name: "Интервью",
-        icon: "🎤",
-        config: { type: "color", color: "#2c3e50" },
+        id: "friends",
+        name: "Дружеская встреча",
+        icon: "🍻",
+        config: { type: "photo", photo: "images/home.png" },
+        privacy: "low",
     },
     {
-        id: "streaming",
-        name: "Стриминг",
-        icon: "🎮",
-        config: { type: "color", color: "#8e44ad" },
-    },
-    {
-        id: "presentation",
-        name: "Презентация",
-        icon: "📊",
-        config: { type: "blur", blurAmount: 15 },
+        id: "coworkers",
+        name: "Встреча с коллегами",
+        icon: "👥",
+        config: { type: "photo", photo: "images/office.png" },
+        privacy: "medium",
     },
 ];
 
-const onReady = () => {
-    console.log("VideoCanvas готов");
-};
-
 const toggleCamera = async () => {
+    if (!videoCanvas.value) return;
     if (isRunning.value) {
-        videoCanvas.value.stop();
+        videoCanvas.value.stop && (await videoCanvas.value.stop());
         isRunning.value = false;
     } else {
         try {
-            await videoCanvas.value.start();
+            await (videoCanvas.value.start && videoCanvas.value.start());
             isRunning.value = true;
-        } catch (error) {
-            console.error("Ошибка запуска:", error);
-            alert("Не удалось запустить камеру: " + error.message);
+        } catch (e) {
+            console.error(e);
+            alert("Не удалось запустить камеру: " + (e?.message || e));
         }
     }
 };
-
-const applyPreset = (preset) => {
-    Object.assign(backgroundConfig.value, preset.config);
+const onReady = () => {};
+const applyPreset = (p) => {
+    Object.assign(backgroundConfig.value, p.config);
     backgroundEnabled.value = true;
+    privacyLevel.value = p.privacy;
 };
 </script>
 
 <style scoped>
-.full-interface {
-    min-height: 100vh;
-    background: white;
+.mono {
+    color: #e6e7e9;
+    background: #0f0f10;
 }
-
 .header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 20px 30px;
+    background: #141416;
+    color: #e6e7e9;
+    padding: 16px 20px;
+    border-bottom: 1px solid #2a2b2e;
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
-
 .header h1 {
-    font-size: 1.8rem;
+    font-size: 1.1rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     margin: 0;
 }
-
-.presentation-btn {
-    padding: 10px 20px;
-    background: rgba(255, 255, 255, 0.2);
-    color: white;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.3s;
-}
-
-.presentation-btn:hover {
-    background: rgba(255, 255, 255, 0.3);
-    border-color: white;
+.header-year {
+    margin-left: auto;
+    color: #a7a9ad;
+    font-size: 0.9rem;
 }
 
 .content {
     display: grid;
-    grid-template-columns: 350px 1fr;
-    gap: 20px;
-    padding: 20px;
-    height: calc(100vh - 80px);
+    grid-template-columns: 360px 1fr;
+    gap: 16px;
+    padding: 16px;
+    height: calc(100vh - 64px);
+    overflow: hidden;
 }
-
 .controls-panel {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 12px;
     overflow-y: auto;
+    padding-right: 8px;
 }
 
 .control-group {
-    background: #f8f9fa;
-    padding: 20px;
+    background: #141416;
+    border: 1px solid #2a2b2e;
     border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.control-group h3 {
-    color: #667eea;
-    margin-bottom: 15px;
-    font-size: 1.1rem;
-}
-
-.input,
-.select {
-    width: 100%;
     padding: 10px;
-    margin-bottom: 10px;
-    border: 2px solid #dee2e6;
-    border-radius: 8px;
-    font-size: 1rem;
-    transition: border-color 0.3s;
+}
+.control-group h3 {
+    font-size: 0.95rem;
+    margin: 0 0 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #a7a9ad;
 }
 
-.input:focus,
-.select:focus {
-    outline: none;
-    border-color: #667eea;
-}
-
-.slider-group,
-.color-group {
-    margin: 15px 0;
-}
-
-.slider-group label,
-.color-group label {
+.label {
+    font-size: 0.78rem;
+    color: #a7a9ad;
+    margin-top: 8px;
+    margin-bottom: 4px;
     display: block;
-    margin-bottom: 8px;
-    font-weight: 600;
-    color: #333;
+}
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+}
+.col-span-2 {
+    grid-column: span 2;
+}
+.privacy-select {
+    margin-bottom: 14px;
 }
 
-.slider {
-    width: 100%;
-}
-
+.input-field,
+.select-field,
+.range,
 .color-picker {
     width: 100%;
-    height: 40px;
-    border: 2px solid #dee2e6;
-    border-radius: 8px;
-    cursor: pointer;
+    background: #1a1b1e;
+    color: #e6e7e9;
+    border: 1px solid #2a2b2e;
+    border-radius: 10px;
+    padding: 10px 12px;
 }
-
+.range {
+    padding: 0;
+}
+.radio-row {
+    display: flex;
+    gap: 8px;
+}
+.radio {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #1a1b1e;
+    border: 1px solid #2a2b2e;
+    border-radius: 999px;
+}
 .checkbox {
     display: flex;
     align-items: center;
-    gap: 10px;
-    cursor: pointer;
+    gap: 8px;
     margin-top: 10px;
-}
-
-.checkbox input {
-    width: 18px;
-    height: 18px;
-    cursor: pointer;
+    color: #e6e7e9;
 }
 
 .presets {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
+    gap: 8px;
 }
-
 .preset-btn {
-    padding: 12px;
-    background: white;
-    border: 2px solid #dee2e6;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.3s;
+    text-align: left;
+    background: #1a1b1e;
+    border: 1px solid #2a2b2e;
+    color: #e6e7e9;
+    border-radius: 10px;
+    padding: 10px 12px;
 }
-
 .preset-btn:hover {
-    border-color: #667eea;
-    background: #f0f4ff;
-    transform: translateY(-2px);
+    border-color: #7a7d83;
 }
 
 .action-buttons {
     display: flex;
     gap: 10px;
 }
-
 .btn {
-    flex: 1;
-    padding: 15px;
-    border: none;
+    padding: 10px 14px;
     border-radius: 10px;
-    font-size: 1.1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border: 1px solid #2a2b2e;
+    background: #1a1b1e;
+    color: #e6e7e9;
 }
-
-.btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
-}
-
 .btn-primary {
-    background: #667eea;
-    color: white;
+    border-color: #7a7d83;
 }
-
-.btn-primary:hover {
-    background: #5568d3;
-}
-
 .btn-danger {
-    background: #e74c3c;
-    color: white;
-}
-
-.btn-danger:hover {
-    background: #d62c1a;
+    border-color: #7a7d83;
 }
 
 .video-panel {
-    background: #000;
+    background: #141416;
+    border: 1px solid #2a2b2e;
     border-radius: 12px;
+    padding: 8px;
+    display: block;
+    align-self: start;
+    height: 100%;
+    min-height: 540px;
     overflow: hidden;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.carousel {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+.thumb {
+    background: #1a1b1e;
+    border: 1px solid #2a2b2e;
+    border-radius: 8px;
+    padding: 0;
+    overflow: hidden;
+    aspect-ratio: 16/9;
+}
+.thumb.active {
+    outline: 2px solid #7a7d83;
+}
+.thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.hint {
+    font-size: 0.8rem;
+    color: #a7a9ad;
+    margin-top: 6px;
+}
+.color-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.color-code {
+    font-size: 0.8rem;
+    color: #a7a9ad;
+}
+.color-picker {
+    appearance: auto;
+    -webkit-appearance: auto;
+    height: 36px;
+    width: 48px;
+    padding: 0;
+    border: 1px solid #2a2b2e;
+    border-radius: 6px;
 }
 
 @media (max-width: 1024px) {
     .content {
         grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr;
-    }
-
-    .controls-panel {
-        max-height: 300px;
     }
 }
 </style>

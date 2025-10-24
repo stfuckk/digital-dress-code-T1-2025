@@ -117,6 +117,8 @@ const start = async () => {
 };
 
 const stop = () => {
+    try { const ctx = outputCanvas.value?.getContext('2d'); if (ctx && outputCanvas.value) ctx.clearRect(0,0,outputCanvas.value.width,outputCanvas.value.height);} catch(e){}
+
     isRunning.value = false;
 
     if (animationId) {
@@ -144,6 +146,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+    try { const ctx = outputCanvas.value?.getContext('2d'); if (ctx && outputCanvas.value) ctx.clearRect(0,0,outputCanvas.value.width,outputCanvas.value.height);} catch(e){}
+
     stop();
 });
 

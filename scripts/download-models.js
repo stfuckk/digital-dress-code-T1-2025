@@ -9,15 +9,13 @@ const __dirname = path.dirname(__filename);
 // URLs для загрузки
 const MODEL_URL =
   "https://github.com/PeterL1n/RobustVideoMatting/releases/download/v1.0.0/rvm_mobilenetv3_fp32.onnx";
-const WASM_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.0/dist/";
 
 // Пути для сохранения
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const MODELS_DIR = path.join(PUBLIC_DIR, "models");
-const ORT_DIR = path.join(PUBLIC_DIR, "ort");
 
 // Создаем директории если их нет
-[PUBLIC_DIR, MODELS_DIR, ORT_DIR].forEach((dir) => {
+[PUBLIC_DIR, MODELS_DIR].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
