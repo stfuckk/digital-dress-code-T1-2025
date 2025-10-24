@@ -3,195 +3,183 @@ import { env, InferenceSession, Tensor } from "onnxruntime-web";
 // Оптимизированные настройки ONNX Runtime
 env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.0/dist/";
 env.wasm.simd = true;
-env.wasm.proxy = false;
+env.wasm.proxy = true; // Use proxy for better performance
 env.logLevel = "warning";
-
-// Дополнительные оптимизации
-env.wasm.numThreads = 1; // Будет установлено динамически
-env.wasm.simd = true;
-env.wasm.proxy = false;
 
 let session = null;
 let downsample = 0.25;
-let r1 = null,
-  r2 = null,
-  r3 = null,
-  r4 = null;
+let r1 = null, r2 = null, r3 = null, r4 = null;
 
-// Параметры постобработки (отключены для производительности)
-let enablePostProcessing = false;
-let blurRadius = 0;
-let edgeThreshold = 0.1;
-let morphKernelSize = 3;
+// Temporal stabilization
+let prevMask = null;
+const TEMPORAL_ALPHA = 0.6; // EMA coefficient
 
+// Buffer reuse
+let tensorCache = {
+  inputBuffer: null,
+  inputShape: null,
+  downsampleTensor: null,
+};
+
+// Pipeline state
+let isProcessing = false;
+let pendingFrame = null;
+
+// Performance tracking
+let perfMetrics = {
+  preprocess: 0,
+  inference: 0,
+  postprocess: 0,
+  total: 0
+};
+
+// Optimized tensor conversion with buffer reuse
 function imageBitmapToTensor(bitmap) {
   const width = bitmap.width;
   const height = bitmap.height;
+  const size = width * height;
+
+  // Reuse buffer if same shape
+  const needsRealloc = !tensorCache.inputBuffer || 
+                       tensorCache.inputShape?.[0] !== height ||
+                       tensorCache.inputShape?.[1] !== width;
+
+  if (needsRealloc) {
+    tensorCache.inputBuffer = new Float32Array(3 * size);
+    tensorCache.inputShape = [height, width];
+  }
 
   const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) throw new Error("Cannot get 2d context");
 
   ctx.drawImage(bitmap, 0, 0);
   const imageData = ctx.getImageData(0, 0, width, height);
   const pixels = imageData.data;
 
-  const tensorData = new Float32Array(1 * 3 * height * width);
+  const tensorData = tensorCache.inputBuffer;
+  const gOffset = size;
+  const bOffset = 2 * size;
 
-  let rOffset = 0;
-  let gOffset = height * width;
-  let bOffset = 2 * height * width;
-
-  for (let i = 0; i < height * width; i++) {
+  // Optimized loop
+  for (let i = 0; i < size; i++) {
     const p = i * 4;
-    tensorData[rOffset++] = pixels[p] / 255.0;
-    tensorData[gOffset++] = pixels[p + 1] / 255.0;
-    tensorData[bOffset++] = pixels[p + 2] / 255.0;
+    tensorData[i] = pixels[p] / 255.0;
+    tensorData[gOffset + i] = pixels[p + 1] / 255.0;
+    tensorData[bOffset + i] = pixels[p + 2] / 255.0;
   }
+
   return new Tensor("float32", tensorData, [1, 3, height, width]);
 }
 
-// Функции постобработки маски
-function applyGaussianBlur(data, width, height, radius) {
+// Temporal stabilization with EMA
+function applyTemporalStabilization(maskData, width, height) {
+  const size = width * height;
+  
+  if (!prevMask || prevMask.length !== size) {
+    prevMask = new Float32Array(maskData);
+    return maskData;
+  }
+
+  const stabilized = new Float32Array(size);
+  const alpha = TEMPORAL_ALPHA;
+  const beta = 1.0 - alpha;
+
+  for (let i = 0; i < size; i++) {
+    stabilized[i] = alpha * maskData[i] + beta * prevMask[i];
+  }
+
+  prevMask.set(stabilized);
+  return stabilized;
+}
+
+// Simple morphological close to reduce flicker
+function morphologicalClose(data, width, height, kernelSize = 3) {
   const result = new Float32Array(data.length);
-  const sigma = radius / 3;
-  const kernelSize = Math.ceil(radius * 2) + 1;
-  const kernel = new Float32Array(kernelSize);
+  const halfKernel = Math.floor(kernelSize / 2);
   
-  // Создаем ядро Гаусса
-  let sum = 0;
-  for (let i = 0; i < kernelSize; i++) {
-    const x = i - Math.floor(kernelSize / 2);
-    kernel[i] = Math.exp(-(x * x) / (2 * sigma * sigma));
-    sum += kernel[i];
-  }
-  
-  // Нормализуем ядро
-  for (let i = 0; i < kernelSize; i++) {
-    kernel[i] /= sum;
-  }
-  
-  // Применяем размытие по горизонтали
+  // Dilation
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      let value = 0;
-      for (let k = 0; k < kernelSize; k++) {
-        const nx = x + k - Math.floor(kernelSize / 2);
-        if (nx >= 0 && nx < width) {
-          value += data[y * width + nx] * kernel[k];
+      let maxVal = 0;
+      for (let ky = -halfKernel; ky <= halfKernel; ky++) {
+        for (let kx = -halfKernel; kx <= halfKernel; kx++) {
+          const nx = x + kx;
+          const ny = y + ky;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            maxVal = Math.max(maxVal, data[ny * width + nx]);
+          }
         }
       }
-      result[y * width + x] = value;
+      result[y * width + x] = maxVal;
     }
   }
   
-  // Применяем размытие по вертикали
+  // Erosion (on result of dilation)
   const final = new Float32Array(data.length);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      let value = 0;
-      for (let k = 0; k < kernelSize; k++) {
-        const ny = y + k - Math.floor(kernelSize / 2);
-        if (ny >= 0 && ny < height) {
-          value += result[ny * width + x] * kernel[k];
+      let minVal = 1.0;
+      for (let ky = -halfKernel; ky <= halfKernel; ky++) {
+        for (let kx = -halfKernel; kx <= halfKernel; kx++) {
+          const nx = x + kx;
+          const ny = y + ky;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            minVal = Math.min(minVal, result[ny * width + nx]);
+          }
         }
       }
-      final[y * width + x] = value;
+      final[y * width + x] = minVal;
     }
   }
   
   return final;
 }
 
-function applyMorphology(data, width, height, kernelSize, operation = 'close') {
-  const result = new Float32Array(data.length);
-  const halfKernel = Math.floor(kernelSize / 2);
+// Post-process mask with temporal stabilization and optional morphological filtering
+function postProcessMask(phaData, width, height, enableMorph = true) {
+  const t0 = performance.now();
   
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let value = data[y * width + x];
-      
-      if (operation === 'close') {
-        // Морфологическое закрытие (расширение + эрозия)
-        let maxVal = value;
-        for (let ky = -halfKernel; ky <= halfKernel; ky++) {
-          for (let kx = -halfKernel; kx <= halfKernel; kx++) {
-            const nx = x + kx;
-            const ny = y + ky;
-            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-              maxVal = Math.max(maxVal, data[ny * width + nx]);
-            }
-          }
-        }
-        value = maxVal;
-      } else if (operation === 'open') {
-        // Морфологическое открытие (эрозия + расширение)
-        let minVal = value;
-        for (let ky = -halfKernel; ky <= halfKernel; ky++) {
-          for (let kx = -halfKernel; kx <= halfKernel; kx++) {
-            const nx = x + kx;
-            const ny = y + ky;
-            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-              minVal = Math.min(minVal, data[ny * width + nx]);
-            }
-          }
-        }
-        value = minVal;
-      }
-      
-      result[y * width + x] = value;
-    }
+  // Apply temporal stabilization (EMA)
+  let processed = applyTemporalStabilization(phaData, width, height);
+  
+  // Optional: apply morphological close to reduce flicker
+  if (enableMorph) {
+    processed = morphologicalClose(processed, width, height, 2); // Small kernel
   }
   
-  return result;
-}
-
-function enhanceMaskEdges(data, width, height, threshold) {
-  const result = new Float32Array(data.length);
-  
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      const value = data[idx];
-      
-      // Проверяем градиент на краях
-      let isEdge = false;
-      if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
-        const gx = Math.abs(data[idx + 1] - data[idx - 1]);
-        const gy = Math.abs(data[(y + 1) * width + x] - data[(y - 1) * width + x]);
-        const gradient = Math.sqrt(gx * gx + gy * gy);
-        isEdge = gradient > threshold;
-      }
-      
-      // Усиливаем края
-      if (isEdge) {
-        result[idx] = Math.min(1.0, value * 1.2);
-      } else {
-        result[idx] = value;
-      }
-    }
-  }
-  
-  return result;
-}
-
-function postProcessMask(phaData, width, height) {
-  if (!enablePostProcessing) return phaData;
-  
-  let processed = new Float32Array(phaData);
-  
-  // 1. Морфологическое закрытие для заполнения дыр
-  processed = applyMorphology(processed, width, height, morphKernelSize, 'close');
-  
-  // 2. Усиление краев
-  processed = enhanceMaskEdges(processed, width, height, edgeThreshold);
-  
-  // 3. Легкое размытие для сглаживания
-  if (blurRadius > 0) {
-    processed = applyGaussianBlur(processed, width, height, blurRadius);
-  }
-  
+  perfMetrics.postprocess = performance.now() - t0;
   return processed;
+}
+
+// Pre-warm model with dummy input
+async function prewarmModel(width, height) {
+  console.log(`[Worker] Pre-warming model with ${width}x${height} input...`);
+  
+  const dummyCanvas = new OffscreenCanvas(width, height);
+  const ctx = dummyCanvas.getContext("2d");
+  ctx.fillStyle = "#808080";
+  ctx.fillRect(0, 0, width, height);
+  
+  const dummyBitmap = dummyCanvas.transferToImageBitmap();
+  const dummyTensor = imageBitmapToTensor(dummyBitmap);
+  
+  const z = new Float32Array(1);
+  const zShape = [1, 1, 1, 1];
+  
+  const feeds = {
+    src: dummyTensor,
+    downsample_ratio: tensorCache.downsampleTensor || new Tensor("float32", new Float32Array([downsample]), [1]),
+    r1i: new Tensor("float32", z, zShape),
+    r2i: new Tensor("float32", z, zShape),
+    r3i: new Tensor("float32", z, zShape),
+    r4i: new Tensor("float32", z, zShape),
+  };
+  
+  await session.run(feeds);
+  dummyBitmap.close();
+  
+  console.log("[Worker] Model pre-warming complete");
 }
 
 self.onmessage = async (e) => {
@@ -199,58 +187,102 @@ self.onmessage = async (e) => {
 
   try {
     if (msg.type === "init") {
-      // Оптимизированное количество потоков
-      const wantThreads = msg.threads ?? Math.min(2, self.navigator?.hardwareConcurrency || 1);
+      const t0 = performance.now();
+      let actualProvider = "wasm"; // Default provider
+      
+      // Enable SIMD and multithreading for WASM
+      env.wasm.simd = true;
+      const wantThreads = msg.threads ?? Math.max(2, Math.min(4, self.navigator?.hardwareConcurrency || 2));
       env.wasm.numThreads = self.crossOriginIsolated ? wantThreads : 1;
+      
+      console.log(`[Worker] Initializing with ${env.wasm.numThreads} threads, SIMD: ${env.wasm.simd}`);
+      if (!self.crossOriginIsolated) {
+        console.warn("[Worker] Not cross-origin isolated, multithreading disabled");
+      }
 
       try {
-        // Загрузка модели
+        // Load model
         const resp = await fetch(msg.modelUrl, { credentials: "same-origin" });
         if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
         const buf = await resp.arrayBuffer();
         if (buf.byteLength < 100 * 1024) {
-          const head = new TextDecoder().decode(
-            new Uint8Array(buf).slice(0, 200),
-          );
-          throw new Error(
-            `Файл слишком мал (${buf.byteLength} B). Похоже не ONNX: ${head}`,
-          );
+          const head = new TextDecoder().decode(new Uint8Array(buf).slice(0, 200));
+          throw new Error(`File too small (${buf.byteLength} B). Not ONNX: ${head}`);
         }
 
-        // Оптимизированные настройки сессии
-        session = await InferenceSession.create(buf, {
-          executionProviders: ["wasm"],
-          graphOptimizationLevel: "all",
-          enableCpuMemArena: true,
-          enableMemPattern: true,
-          enableProfiling: false,
-          logSeverityLevel: 2, // warning
-        });
+        // Try execution providers in order: WebGL -> WASM (skip WebGPU for now due to unsupported ops)
+        let providers = [];
+        
+        // WebGPU has issues with some ops (ceil() in AveragePool), skip for now
+        // if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
+        //   providers.push("webgpu");
+        //   console.log("[Worker] WebGPU available, trying it first");
+        // }
+        
+        // Add WebGL and WASM
+        providers.push("webgl");
+        providers.push("wasm");
+        
+        console.log(`[Worker] Trying providers: ${providers.join(" -> ")}`);
+
+        // Try providers in order
+        for (const provider of providers) {
+          try {
+            session = await InferenceSession.create(buf, {
+              executionProviders: [provider],
+              graphOptimizationLevel: "all",
+              enableCpuMemArena: true,
+              enableMemPattern: true,
+              enableProfiling: false,
+              logSeverityLevel: 2,
+            });
+            actualProvider = provider;
+            console.log(`[Worker] ✓ Using ${provider.toUpperCase()} backend`);
+            break;
+          } catch (providerError) {
+            console.warn(`[Worker] ${provider} failed:`, providerError.message);
+            if (provider === providers[providers.length - 1]) {
+              throw providerError; // Last provider failed
+            }
+          }
+        }
       } catch (e2) {
         self.postMessage({
           type: "error",
-          message: `Не удалось загрузить модель ${msg.modelUrl}: ${e2.message || e2}`,
+          message: `Failed to load model ${msg.modelUrl}: ${e2.message || e2}`,
         });
         return;
       }
 
-      // Оптимизированные параметры для производительности
-      downsample = msg.downsample ?? 0.7; // Увеличиваем для FPS
-      enablePostProcessing = msg.enablePostProcessing ?? false; // Отключаем по умолчанию
-      blurRadius = msg.blurRadius ?? 0;
-      edgeThreshold = msg.edgeThreshold ?? 0.1;
-      morphKernelSize = msg.morphKernelSize ?? 3;
+      // Set downsample ratio and cache tensor
+      downsample = msg.downsample ?? 0.25; // Lower = faster (256-320p inference)
+      tensorCache.downsampleTensor = new Tensor("float32", new Float32Array([downsample]), [1]);
       
       r1 = r2 = r3 = r4 = null;
+      prevMask = null;
+
+      // Pre-warm model (only if WASM, as WebGL/WebGPU may have issues)
+      if (actualProvider === "wasm") {
+        try {
+          await prewarmModel(256, 256);
+        } catch (warmupError) {
+          console.warn("[Worker] Model pre-warming failed:", warmupError);
+        }
+      } else {
+        console.log("[Worker] Skipping pre-warming for", actualProvider);
+      }
+
+      const initTime = performance.now() - t0;
+      console.log(`[Worker] Initialization complete in ${initTime.toFixed(1)}ms`);
 
       self.postMessage({ 
         type: "ready",
         config: {
           downsample,
-          enablePostProcessing,
-          blurRadius,
-          edgeThreshold,
-          morphKernelSize
+          backend: actualProvider,
+          threads: env.wasm.numThreads,
+          simd: env.wasm.simd,
+          initTimeMs: initTime
         }
       });
       return;
@@ -258,6 +290,9 @@ self.onmessage = async (e) => {
 
     if (msg.type === "reset") {
       r1 = r2 = r3 = r4 = null;
+      prevMask = null;
+      tensorCache.inputBuffer = null;
+      tensorCache.inputShape = null;
       self.postMessage({ type: "reset-ok" });
       return;
     }
@@ -268,56 +303,85 @@ self.onmessage = async (e) => {
         return;
       }
 
+      // Pipeline parallelism: if already processing, queue this frame
+      if (isProcessing) {
+        if (pendingFrame) {
+          pendingFrame.close(); // Drop old pending frame
+        }
+        pendingFrame = msg.bitmap;
+        return;
+      }
+
+      isProcessing = true;
       const t0 = performance.now();
 
+      // Preprocessing
+      const tPreStart = performance.now();
       const srcTensor = imageBitmapToTensor(msg.bitmap);
+      perfMetrics.preprocess = performance.now() - tPreStart;
 
-      // Начальные состояния для RVM
+      // Initial states for RVM
       const z = new Float32Array(1);
       const zShape = [1, 1, 1, 1];
 
       const feeds = {
         src: srcTensor,
-        downsample_ratio: new Tensor(
-          "float32",
-          new Float32Array([downsample]),
-          [1],
-        ),
+        downsample_ratio: tensorCache.downsampleTensor,
         r1i: r1 ?? new Tensor("float32", z, zShape),
         r2i: r2 ?? new Tensor("float32", z, zShape),
         r3i: r3 ?? new Tensor("float32", z, zShape),
         r4i: r4 ?? new Tensor("float32", z, zShape),
       };
 
+      // Inference
+      const tInfStart = performance.now();
       const outputs = await session.run(feeds);
+      perfMetrics.inference = performance.now() - tInfStart;
+
       r1 = outputs.r1o;
       r2 = outputs.r2o;
       r3 = outputs.r3o;
       r4 = outputs.r4o;
 
       const pha = outputs.pha;
-      const t1 = performance.now();
+      const w = pha.dims[3];
+      const h = pha.dims[2];
 
-      // Применяем постобработку маски
-      const processedPha = postProcessMask(pha.data, pha.dims[3], pha.dims[2]);
-      const t2 = performance.now();
+      // Post-processing with temporal stabilization
+      const processedPha = postProcessMask(pha.data, w, h, true);
+      
+      perfMetrics.total = performance.now() - t0;
 
+      // Send result with detailed metrics
       self.postMessage(
         { 
           type: "result", 
           pha: processedPha, 
-          shape: pha.dims, 
-          timeMs: t1 - t0,
-          postProcessTimeMs: t2 - t1,
-          totalTimeMs: t2 - t0
+          shape: pha.dims,
+          metrics: {
+            preprocess: perfMetrics.preprocess,
+            inference: perfMetrics.inference,
+            postprocess: perfMetrics.postprocess,
+            total: perfMetrics.total
+          }
         },
         [processedPha.buffer],
       );
 
       msg.bitmap.close();
+      isProcessing = false;
+
+      // Process pending frame if exists (pipeline parallelism)
+      if (pendingFrame) {
+        const nextFrame = pendingFrame;
+        pendingFrame = null;
+        self.postMessage({ type: "run", bitmap: nextFrame });
+      }
+
       return;
     }
   } catch (error) {
+    isProcessing = false;
     self.postMessage({ type: "error", message: `Worker error: ${error}` });
     console.error("Worker error:", error);
   }
