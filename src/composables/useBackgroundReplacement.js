@@ -18,6 +18,12 @@ export function useBackgroundReplacement(
   const downsample = 0.25;
   const threads = 4;
 
+  // Оптимизации: пропуск кадров
+  let frameSkipCounter = 0;
+  const PROCESS_EVERY_N_FRAMES = 1; // Обрабатывать каждый 2-й кадр
+  let lastProcessedMask = null;
+  let isProcessing = false;
+
   // Создание Web Worker
   const createWorker = () => {
     return new Worker(new URL("../workers/rvm.worker.js", import.meta.url), {
@@ -64,11 +70,17 @@ export function useBackgroundReplacement(
 
           emaLatencyMs = 0.9 * emaLatencyMs + 0.1 * timeMs;
 
+          // Сохраняем маску для повторного использования
+          lastProcessedMask = { pha, w, h };
+
           // Рендеринг маски
           renderMaskToCanvas(pha, w, h);
 
           // Обновление статистики
           updateFrameStats(timeMs);
+          
+          // Разблокируем для следующего кадра
+          isProcessing = false;
         }
       };
 
@@ -187,11 +199,30 @@ export function useBackgroundReplacement(
     if (!worker || !isReady || !sourceVideo.value || !outputCanvas.value)
       return;
 
+    frameSkipCounter++;
+    
+    // Пропускаем кадры для оптимизации
+    if (frameSkipCounter % PROCESS_EVERY_N_FRAMES !== 0) {
+      // Используем последнюю обработанную маску
+      if (lastProcessedMask) {
+        renderMaskToCanvas(lastProcessedMask.pha, lastProcessedMask.w, lastProcessedMask.h);
+      }
+      return;
+    }
+
+    // Не запускаем новую обработку если предыдущая еще идет
+    if (isProcessing) return;
+    
+    isProcessing = true;
+
     const video = sourceVideo.value;
     const vw = video.videoWidth || 640;
     const vh = video.videoHeight || 360;
 
-    if (!vw || !vh) return;
+    if (!vw || !vh) {
+      isProcessing = false;
+      return;
+    }
 
     // Вычисляем размер для обработки
     const { w, h } = calcScaledSize(vw, vh, targetShort);
