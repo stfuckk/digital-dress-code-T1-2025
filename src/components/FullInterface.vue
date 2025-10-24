@@ -266,18 +266,24 @@ const backgroundConfig = ref({
     photo: null,
 });
 
+// Список доступных фоновых изображений (добавляйте новые файлы сюда)
 const imageCandidates = [
     "images/office.png",
     "images/home.png",
     "images/cafe.png",
+    "images/spongbob.png",
 ];
+
 const images = ref([]);
 function probeImages() {
     images.value = [];
     imageCandidates.forEach((src) => {
         const img = new Image();
         img.onload = () => {
-            if (!images.value.includes(src)) images.value.push(src);
+            if (!images.value.includes(src)) {
+                images.value.push(src);
+                console.log(`✓ Загружено изображение: ${src}`);
+            }
             // НЕ перезаписываем, если уже выбрано
             if (
                 backgroundConfig.value.type === "photo" &&
@@ -286,7 +292,9 @@ function probeImages() {
                 backgroundConfig.value.photo = src;
             }
         };
-        img.onerror = () => {};
+        img.onerror = () => {
+            console.warn(`✗ Не удалось загрузить изображение: ${src}`);
+        };
         img.src = src;
     });
 }
@@ -308,14 +316,14 @@ const presets = [
         name: "Встреча с заказчиком",
         icon: "🤝",
         config: { type: "photo", photo: "images/office.png" },
-        privacy: "high",
+        privacy: "low", // Показываем всё включая контакты
     },
     {
         id: "friends",
         name: "Дружеская встреча",
         icon: "☕",
         config: { type: "photo", photo: "images/cafe.png" },
-        privacy: "low",
+        privacy: "minimal", // Только ФИО
     },
     {
         id: "coworkers",

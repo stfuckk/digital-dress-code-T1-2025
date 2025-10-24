@@ -162,6 +162,14 @@ export function useBackgroundReplacement(
       ctx.shadowBlur = 0;
     };
     
+    // МИНИМАЛЬНЫЙ уровень приватности: только ФИО
+    if (privacyLevel === 'minimal') {
+      if (name) {
+        drawTextWithShadow(name, padding, yPos, 40, 'white', '800');
+      }
+      return;
+    }
+    
     // ВЫСОКИЙ уровень приватности: только компания
     if (privacyLevel === 'high') {
       if (company) {
