@@ -67,6 +67,9 @@ const {
     start: startProcessing,
     stop: stopProcessing,
     processFrame,
+    setTurboMode,
+    setQualityMode,
+    clearBlurCache,
 } = useBackgroundReplacement(sourceVideo, outputCanvas, stats, props);
 
 let stream = null;
@@ -152,7 +155,8 @@ onUnmounted(() => {
 watch(
     () => props.backgroundConfig,
     () => {
-        // Реакция на изменение настроек фона
+        // Очищаем кэш блюра при изменении настроек
+        clearBlurCache();
     },
     { deep: true },
 );
@@ -160,6 +164,8 @@ watch(
 defineExpose({
     start,
     stop,
+    setTurboMode,
+    setQualityMode,
 });
 </script>
 

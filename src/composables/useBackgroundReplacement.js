@@ -5,44 +5,172 @@ export function useBackgroundReplacement(
   props,
 ) {
   let worker = null;
+  let composer = null;
   let isInitialized = false;
   let isReady = false;
+  let isComposerReady = false;
   let frameCount = 0;
   let fpsHistory = [];
   let lastFpsTime = Date.now();
   let fpsFrameCount = 0;
   let emaLatencyMs = 25;
 
-  // Параметры модели
-  const targetShort = 480; // Целевое разрешение
-  const downsample = 0.25;
-  const threads = 4;
+  // Оптимизированные параметры модели для производительности
+  const targetShort = 480; // Уменьшаем разрешение для FPS
+  const downsample = 0.7; // Увеличиваем для производительности
+  const threads = 1; // Минимум потоков для стабильности
+  
+  // Параметры постобработки (отключены для FPS)
+  const enablePostProcessing = false; // Отключаем для производительности
+  const blurRadius = 0;
+  const edgeThreshold = 0.1;
+  const morphKernelSize = 3;
 
-  // Оптимизации: пропуск кадров
+  // Адаптивные оптимизации
   let frameSkipCounter = 0;
-  const PROCESS_EVERY_N_FRAMES = 1; // Обрабатывать каждый 2-й кадр
+  let PROCESS_EVERY_N_FRAMES = 1; // Адаптивный пропуск кадров
   let lastProcessedMask = null;
   let isProcessing = false;
+  let performanceHistory = [];
+  let adaptiveDownsample = downsample;
+  let adaptiveFrameSkip = 1;
+  
+  // Режим "Турбо" для максимальной производительности
+  let turboMode = true;
 
   // Фоновое изображение
   const loadedBackgroundImage = { value: null };
   let currentPhotoUrl = null;
+  
+  // Кэш для блюра фона
+  let blurCache = null;
+  let lastBlurTime = 0;
+  let lastBlurFrame = null;
+  let lastBlurConfig = null;
+  const BLUR_CACHE_DURATION = 50; // Кэшируем блюр на 50мс
+  
+  // Адаптивное кэширование на основе движения
+  let motionDetected = false;
+  let staticFrameCount = 0;
+  let lastMaskSum = 0;
+  
+  // Простая детекция движения по изменению маски
+  function detectMotion(pha, w, h) {
+    // Вычисляем сумму маски для детекции изменений
+    let currentMaskSum = 0;
+    for (let i = 0; i < w * h; i++) {
+      currentMaskSum += pha[i];
+    }
+    
+    // Сравниваем с предыдущим кадром
+    const maskDifference = Math.abs(currentMaskSum - lastMaskSum);
+    const motionThreshold = w * h * 0.01; // 1% от общего количества пикселей
+    
+    if (maskDifference > motionThreshold) {
+      motionDetected = true;
+      staticFrameCount = 0;
+    } else {
+      staticFrameCount++;
+      if (staticFrameCount > 10) { // 10 кадров без движения
+        motionDetected = false;
+      }
+    }
+    
+    lastMaskSum = currentMaskSum;
+  }
 
-  // Создание Web Worker
+  // Быстрая функция рендеринга кэшированного блюра
+  function renderCachedBlur(ctx, width, height) {
+    const now = Date.now();
+    const blurAmount = props.backgroundConfig.blurAmount || 15;
+    const currentConfig = JSON.stringify(props.backgroundConfig);
+    
+    // Адаптивное кэширование: дольше кэшируем при отсутствии движения
+    const cacheDuration = motionDetected ? BLUR_CACHE_DURATION : BLUR_CACHE_DURATION * 3;
+    
+    // Проверяем, нужно ли обновить кэш
+    const shouldUpdateCache = !blurCache || 
+                             (now - lastBlurTime) > cacheDuration ||
+                             lastBlurFrame !== sourceVideo.value ||
+                             lastBlurConfig !== currentConfig;
+    
+    if (shouldUpdateCache) {
+      // Создаем новый кэш блюра
+      if (!blurCache) {
+        blurCache = new OffscreenCanvas(width, height);
+      }
+      
+      const blurCtx = blurCache.getContext("2d");
+      
+      // Применяем блюр к видео
+      blurCtx.filter = `blur(${blurAmount}px)`;
+      blurCtx.drawImage(sourceVideo.value, 0, 0, width, height);
+      blurCtx.filter = "none";
+      
+      lastBlurTime = now;
+      lastBlurFrame = sourceVideo.value;
+      lastBlurConfig = currentConfig;
+    }
+    
+    // Рисуем кэшированный блюр
+    ctx.drawImage(blurCache, 0, 0, width, height);
+  }
+
+  // Функция адаптивной оптимизации производительности
+  function adaptPerformance(processingTime) {
+    if (!turboMode) return; // В турбо-режиме не адаптируем
+    
+    performanceHistory.push(processingTime);
+    if (performanceHistory.length > 3) { // Еще меньше истории для мгновенной реакции
+      performanceHistory.shift();
+    }
+    
+    const avgTime = performanceHistory.reduce((a, b) => a + b, 0) / performanceHistory.length;
+    
+    // Сверх-агрессивная оптимизация для турбо-режима
+    if (avgTime > 20) { // 20ms = 50 FPS - очень строгий порог
+      adaptiveDownsample = Math.min(0.95, adaptiveDownsample + 0.2); // Максимально снижаем качество
+      adaptiveFrameSkip = Math.min(5, adaptiveFrameSkip + 2); // Максимально пропускаем кадров
+      console.log(`⚡ ТУРБО-оптимизация: downsample=${adaptiveDownsample.toFixed(2)}, skip=${adaptiveFrameSkip}`);
+    }
+    // Очень осторожно повышаем качество
+    else if (avgTime < 10 && adaptiveDownsample > 0.6) { // 10ms = 100 FPS
+      adaptiveDownsample = Math.max(0.6, adaptiveDownsample - 0.02);
+      adaptiveFrameSkip = Math.max(1, adaptiveFrameSkip - 1);
+      console.log(`🚀 Микроповышение: downsample=${adaptiveDownsample.toFixed(2)}, skip=${adaptiveFrameSkip}`);
+    }
+  }
+
+  // Создание Web Workers
   const createWorker = () => {
     return new Worker(new URL("../workers/rvm.worker.js", import.meta.url), {
       type: "module",
     });
   };
 
+  const createComposer = () => {
+    try {
+      return new Worker(new URL("../workers/simple-comp.worker.js", import.meta.url), {
+        type: "module",
+      });
+    } catch (error) {
+      console.warn('Не удалось создать композитор:', error);
+      return null;
+    }
+  };
+
   const initialize = async () => {
     if (isInitialized) return;
 
     try {
-      console.log("Загрузка RVM модели...");
+      console.log("🚀 Инициализация оптимизированной RVM модели...");
 
-      // Создаем воркер
+      // Создаем воркеры
       worker = createWorker();
+      // Отключаем композитор для максимальной производительности
+      composer = null; // createComposer();
+      
+      console.log('⚡ Режим максимальной производительности: композитор отключен');
 
       // Настройка обработчиков сообщений от воркера
       worker.onmessage = (e) => {
@@ -55,14 +183,14 @@ export function useBackgroundReplacement(
         }
 
         if (msg.type === "reset-ok") {
-          return;
-        }
+        return;
+      }
 
         if (msg.type === "error") {
           console.error("Worker error:", msg.message);
           stats.value.error = msg.message;
-          return;
-        }
+        return;
+      }
 
         if (msg.type === "result") {
           // Обработка результата
@@ -70,23 +198,73 @@ export function useBackgroundReplacement(
           const dims = msg.shape;
           const h = dims[2],
             w = dims[3];
-          const timeMs = msg.timeMs;
+          const timeMs = msg.timeMs || msg.totalTimeMs || 0;
+          const postProcessTimeMs = msg.postProcessTimeMs || 0;
 
           emaLatencyMs = 0.9 * emaLatencyMs + 0.1 * timeMs;
+
+          // Адаптивная оптимизация производительности
+          adaptPerformance(timeMs);
+          
+          // Детекция движения для умного кэширования
+          detectMotion(pha, w, h);
 
           // Сохраняем маску для повторного использования
           lastProcessedMask = { pha, w, h };
 
-          // Рендеринг маски
-          renderMaskToCanvas(pha, w, h);
+          // Отправляем в композитор для улучшенного смешивания
+          if (composer && isComposerReady) {
+            try {
+              composer.postMessage({
+                type: 'mask',
+                payload: { data: new Uint8Array(pha), width: w, height: h }
+              });
+            } catch (error) {
+              console.warn('Не удалось отправить маску в композитор:', error);
+              // Fallback: рендеринг напрямую
+              renderMaskToCanvas(pha, w, h);
+            }
+          } else {
+            // Fallback: рендеринг напрямую
+            renderMaskToCanvas(pha, w, h);
+          }
 
-          // Обновление статистики
-          updateFrameStats(timeMs);
+          // Обновление статистики с детализацией
+          updateFrameStats(timeMs, postProcessTimeMs);
           
           // Разблокируем для следующего кадра
-          isProcessing = false;
+        isProcessing = false;
+      }
+    };
+
+    // Настройка обработчиков композитора (если доступен)
+    if (composer) {
+      composer.onmessage = (e) => {
+        const msg = e.data;
+        
+        if (msg.type === 'status') {
+          console.log('Composer:', msg.payload);
+          if (msg.payload.includes('ready')) {
+            isComposerReady = true;
+          }
+        }
+        
+        if (msg.type === 'error') {
+          console.error('Composer error:', msg.payload);
+          stats.value.error = msg.payload;
+        }
+        
+        if (msg.type === 'frame') {
+          // Headless режим: рисуем готовый кадр
+          if (msg.payload?.bitmap) {
+            const ctx = outputCanvas.value.getContext('2d');
+            ctx.clearRect(0, 0, outputCanvas.value.width, outputCanvas.value.height);
+            ctx.drawImage(msg.payload.bitmap, 0, 0);
+            msg.payload.bitmap.close();
+          }
         }
       };
+    }
 
       // Инициализация модели
       // URL модели - нужно скачать с GitHub
@@ -94,14 +272,47 @@ export function useBackgroundReplacement(
 
       worker.postMessage({
         type: "init",
-        modelUrl,
-        downsample,
+      modelUrl,
+      downsample,
         threads,
-      });
+        enablePostProcessing,
+        blurRadius,
+        edgeThreshold,
+        morphKernelSize,
+    });
 
-      isInitialized = true;
+    // Инициализация композитора (если доступен)
+    if (composer) {
+      try {
+        const canvas = outputCanvas.value;
+        const width = canvas.width || 640;
+        const height = canvas.height || 360;
+        
+        // Создаем клонируемый объект конфигурации
+        const backgroundConfig = {
+          type: props.backgroundConfig?.type || 'blur',
+          blurAmount: props.backgroundConfig?.blurAmount || 15,
+          color: props.backgroundConfig?.color || '#2e2e2e',
+          photo: props.backgroundConfig?.photo || null
+        };
+        
+        composer.postMessage({
+          type: 'headless-init',
+          width,
+          height,
+          mode: backgroundConfig.type,
+          background: backgroundConfig
+        });
+      } catch (error) {
+        console.warn('Не удалось инициализировать композитор:', error);
+        // Продолжаем без композитора
+      }
+    }
+
+    isInitialized = true;
+    console.log("✅ Оптимизированная RVM модель готова к работе!");
     } catch (error) {
-      console.error("Ошибка загрузки модели:", error);
+      console.error("❌ Ошибка загрузки модели:", error);
       throw error;
     }
   };
@@ -259,10 +470,8 @@ export function useBackgroundReplacement(
 
     // Создаем фон
     if (bgType === "blur") {
-      // Размытый фон
-      ctx.filter = `blur(${props.backgroundConfig.blurAmount}px)`;
-      ctx.drawImage(sourceVideo.value, 0, 0, width, height);
-      ctx.filter = "none";
+      // Оптимизированный размытый фон с кэшированием
+      renderCachedBlur(ctx, width, height);
     } else if (bgType === "color") {
       // Однотонный цвет
       const color = hexToRgb(props.backgroundConfig.color);
@@ -328,8 +537,8 @@ export function useBackgroundReplacement(
 
     frameSkipCounter++;
     
-    // Пропускаем кадры для оптимизации
-    if (frameSkipCounter % PROCESS_EVERY_N_FRAMES !== 0) {
+    // Адаптивный пропуск кадров для оптимизации
+    if (frameSkipCounter % adaptiveFrameSkip !== 0) {
       // Используем последнюю обработанную маску
       if (lastProcessedMask) {
         renderMaskToCanvas(lastProcessedMask.pha, lastProcessedMask.w, lastProcessedMask.h);
@@ -359,9 +568,23 @@ export function useBackgroundReplacement(
     const offscreenCtx = offscreen.getContext("2d");
     offscreenCtx.drawImage(video, 0, 0, w, h);
 
-    // Отправляем кадр воркеру
+    // Отправляем кадр воркеру с адаптивными параметрами
     const bitmap = offscreen.transferToImageBitmap();
-    worker.postMessage({ type: "run", bitmap }, [bitmap]);
+    worker.postMessage({ 
+      type: "run", 
+      bitmap, 
+      downsample: adaptiveDownsample 
+    }, [bitmap]);
+
+    // Также отправляем кадр в композитор (если готов)
+    if (composer && isComposerReady) {
+      try {
+        const frameBitmap = await createImageBitmap(video, 0, 0, vw, vh);
+        composer.postMessage({ type: 'frame', frame: frameBitmap }, [frameBitmap]);
+      } catch (error) {
+        console.warn('Не удалось отправить кадр в композитор:', error);
+      }
+    }
   };
 
   const calcScaledSize = (videoWidth, videoHeight, targetShortSide) => {
@@ -380,9 +603,15 @@ export function useBackgroundReplacement(
     return { w, h };
   };
 
-  const updateFrameStats = (processingTime) => {
+  const updateFrameStats = (processingTime, postProcessTime = 0) => {
     frameCount++;
     fpsFrameCount++;
+
+    // Обновляем детализированную статистику
+    stats.value.latency = processingTime;
+    stats.value.postProcessTime = postProcessTime;
+    stats.value.adaptiveDownsample = adaptiveDownsample;
+    stats.value.adaptiveFrameSkip = adaptiveFrameSkip;
 
     // FPS
     const now = Date.now();
@@ -447,9 +676,45 @@ export function useBackgroundReplacement(
     if (worker) {
       worker.postMessage({ type: "reset" });
     }
+    if (composer) {
+      try {
+        composer.postMessage({ type: "stop" });
+      } catch (error) {
+        console.warn('Ошибка остановки композитора:', error);
+      }
+    }
     frameCount = 0;
     fpsHistory = [];
     stats.value = { cpu: 0, gpu: 0, fps: 0, avgFps: 0, latency: 0 };
+  };
+
+  // Функция переключения режимов
+  const setTurboMode = (enabled) => {
+    turboMode = enabled;
+    if (turboMode) {
+      console.log('⚡ Турбо-режим включен: максимальная производительность');
+      adaptiveDownsample = 0.8;
+      adaptiveFrameSkip = 2;
+    } else {
+      console.log('🎨 Режим качества включен: баланс качества и производительности');
+      adaptiveDownsample = 0.5;
+      adaptiveFrameSkip = 1;
+    }
+  };
+
+  const setQualityMode = (enabled) => {
+    setTurboMode(!enabled);
+  };
+
+  // Функция очистки кэша блюра
+  const clearBlurCache = () => {
+    blurCache = null;
+    lastBlurTime = 0;
+    lastBlurFrame = null;
+    lastBlurConfig = null;
+    motionDetected = false;
+    staticFrameCount = 0;
+    console.log('🧹 Кэш блюра очищен');
   };
 
   return {
@@ -458,5 +723,8 @@ export function useBackgroundReplacement(
     stop,
     processFrame,
     updateStats: updateFrameStats,
+    setTurboMode,
+    setQualityMode,
+    clearBlurCache,
   };
 }
