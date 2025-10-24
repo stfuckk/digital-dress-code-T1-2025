@@ -12,7 +12,9 @@ let r1 = null, r2 = null, r3 = null, r4 = null;
 
 // Temporal stabilization
 let prevMask = null;
-const TEMPORAL_ALPHA = 0.6; // EMA coefficient
+const TEMPORAL_ALPHA = 0.75; // EMA coefficient (higher = more current frame, less ghosting)
+let framesSinceReset = 0;
+const RESET_INTERVAL = 150; // Reset temporal state every 150 frames (~5 seconds at 30fps)
 
 // Buffer reuse
 let tensorCache = {
@@ -72,9 +74,17 @@ function imageBitmapToTensor(bitmap) {
   return new Tensor("float32", tensorData, [1, 3, height, width]);
 }
 
-// Temporal stabilization with EMA
+// Temporal stabilization with EMA and periodic resets
 function applyTemporalStabilization(maskData, width, height) {
   const size = width * height;
+  
+  framesSinceReset++;
+  
+  // Periodic reset to prevent drift/dissolving
+  if (framesSinceReset >= RESET_INTERVAL) {
+    prevMask = null;
+    framesSinceReset = 0;
+  }
   
   if (!prevMask || prevMask.length !== size) {
     prevMask = new Float32Array(maskData);
@@ -137,13 +147,14 @@ function morphologicalClose(data, width, height, kernelSize = 3) {
 }
 
 // Post-process mask with temporal stabilization and optional morphological filtering
-function postProcessMask(phaData, width, height, enableMorph = true) {
+function postProcessMask(phaData, width, height, enableMorph = false) {
   const t0 = performance.now();
   
-  // Apply temporal stabilization (EMA)
+  // Apply temporal stabilization (EMA) - this is fast and effective
   let processed = applyTemporalStabilization(phaData, width, height);
   
-  // Optional: apply morphological close to reduce flicker
+  // Optional: apply morphological close to reduce flicker (disabled by default for speed)
+  // Temporal stabilization already provides good smoothing
   if (enableMorph) {
     processed = morphologicalClose(processed, width, height, 2); // Small kernel
   }
@@ -291,6 +302,7 @@ self.onmessage = async (e) => {
     if (msg.type === "reset") {
       r1 = r2 = r3 = r4 = null;
       prevMask = null;
+      framesSinceReset = 0;
       tensorCache.inputBuffer = null;
       tensorCache.inputShape = null;
       self.postMessage({ type: "reset-ok" });
@@ -347,8 +359,8 @@ self.onmessage = async (e) => {
       const w = pha.dims[3];
       const h = pha.dims[2];
 
-      // Post-processing with temporal stabilization
-      const processedPha = postProcessMask(pha.data, w, h, true);
+      // Post-processing with temporal stabilization (morphology disabled for speed)
+      const processedPha = postProcessMask(pha.data, w, h, false);
       
       perfMetrics.total = performance.now() - t0;
 

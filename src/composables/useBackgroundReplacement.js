@@ -35,27 +35,15 @@ export function useBackgroundReplacement(
   const loadedBackgroundImage = { value: null };
   let currentPhotoUrl = null;
   
-  // Background blur cache
-  let blurCache = null;
-  let lastBlurConfig = null;
   
-  // Render cached blur background
+  // Render dynamic blur background (updates every frame)
   function renderBlur(ctx, width, height) {
     const blurAmount = props.backgroundConfig.blurAmount || 15;
-    const currentConfig = JSON.stringify(props.backgroundConfig);
     
-    if (!blurCache || lastBlurConfig !== currentConfig) {
-      if (!blurCache) {
-        blurCache = new OffscreenCanvas(width, height);
-      }
-      const blurCtx = blurCache.getContext("2d");
-      blurCtx.filter = `blur(${blurAmount}px)`;
-      blurCtx.drawImage(sourceVideo.value, 0, 0, width, height);
-      blurCtx.filter = "none";
-      lastBlurConfig = currentConfig;
-    }
-    
-    ctx.drawImage(blurCache, 0, 0, width, height);
+    // Apply blur filter directly to current video frame
+    ctx.filter = `blur(${blurAmount}px)`;
+    ctx.drawImage(sourceVideo.value, 0, 0, width, height);
+    ctx.filter = "none";
   }
 
   // Create Web Worker
@@ -485,11 +473,6 @@ export function useBackgroundReplacement(
     };
   };
 
-  const clearBlurCache = () => {
-    blurCache = null;
-    lastBlurConfig = null;
-    console.log('✓ Blur cache cleared');
-  };
 
   const setDrawingCanvas = (canvas) => {
     drawingCanvas = canvas;
@@ -514,7 +497,6 @@ export function useBackgroundReplacement(
     start,
     stop,
     processFrame,
-    clearBlurCache,
     setDrawingCanvas,
     enableDrawing,
     clearDrawing,

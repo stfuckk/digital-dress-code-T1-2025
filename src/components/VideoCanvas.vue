@@ -129,7 +129,6 @@ const {
     start: startProcessing,
     stop: stopProcessing,
     processFrame,
-    clearBlurCache,
     setDrawingCanvas,
     enableDrawing,
     clearDrawing: clearDrawingComposable,
@@ -300,16 +299,6 @@ onMounted(() => {
 onUnmounted(() => {
     stop();
 });
-
-// Watch для изменения конфига фона
-watch(
-    () => props.backgroundConfig,
-    () => {
-        // Очищаем кэш блюра при изменении настроек
-        clearBlurCache();
-    },
-    { deep: true },
-);
 
 defineExpose({
     start,
