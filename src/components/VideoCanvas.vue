@@ -9,7 +9,7 @@
 
         <canvas ref="outputCanvas" class="output-canvas"></canvas>
 
-        <!-- Информация о пользователе БЕЗ фона, с контрастным текстом -->
+        <!-- Информация о пользователе -->
         <UserInfo
             v-if="userInfo && isRunning"
             :name="userInfo.name"
@@ -67,6 +67,7 @@ const stats = ref({
     gpu: 0,
     fps: 0,
     avgFps: 0,
+    latency: 0,
 });
 
 const {
@@ -74,7 +75,6 @@ const {
     start: startProcessing,
     stop: stopProcessing,
     processFrame,
-    updateStats,
 } = useBackgroundReplacement(sourceVideo, outputCanvas, stats, props);
 
 let stream = null;
@@ -82,9 +82,6 @@ let animationId = null;
 
 const start = async () => {
     try {
-        // Инициализация ML модели
-        await initialize();
-
         // Запуск камеры
         stream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -104,6 +101,9 @@ const start = async () => {
         // Настройка canvas
         outputCanvas.value.width = sourceVideo.value.videoWidth;
         outputCanvas.value.height = sourceVideo.value.videoHeight;
+
+        // Инициализация ML модели
+        await initialize();
 
         isRunning.value = true;
 
