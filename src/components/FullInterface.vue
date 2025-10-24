@@ -164,6 +164,30 @@
                     </div>
                 </div>
 
+                <div class="control-group">
+                    <h3>Режим производительности</h3>
+                    <div class="radio-row">
+                        <label class="radio">
+                            <input
+                                type="radio"
+                                value="turbo"
+                                v-model="performanceMode"
+                                @change="setPerformanceMode"
+                            />
+                            ⚡ Турбо (FPS)
+                        </label>
+                        <label class="radio">
+                            <input
+                                type="radio"
+                                value="quality"
+                                v-model="performanceMode"
+                                @change="setPerformanceMode"
+                            />
+                            🎨 Качество
+                        </label>
+                    </div>
+                </div>
+
                 <div class="action-buttons">
                     <button
                         @click="toggleCamera"
@@ -205,6 +229,7 @@ import VideoCanvas from "./VideoCanvas.vue";
 const videoCanvas = ref(null);
 const isRunning = ref(false);
 const backgroundEnabled = ref(true);
+const performanceMode = ref('turbo'); // По умолчанию турбо-режим
 
 // Employee info per JSON + privacy
 const employee = ref({
@@ -333,6 +358,18 @@ const presets = [
         privacy: "medium",
     },
 ];
+
+const setPerformanceMode = () => {
+    if (!videoCanvas.value) return;
+    
+    if (performanceMode.value === 'turbo') {
+        videoCanvas.value.setTurboMode && videoCanvas.value.setTurboMode(true);
+        console.log('⚡ Переключено в турбо-режим');
+    } else {
+        videoCanvas.value.setQualityMode && videoCanvas.value.setQualityMode(true);
+        console.log('🎨 Переключено в режим качества');
+    }
+};
 
 const toggleCamera = async () => {
     if (!videoCanvas.value) return;
