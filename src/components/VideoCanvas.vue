@@ -21,7 +21,7 @@
         />
     </div>
 </template>
-
+ 
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import StatsPanel from "./StatsPanel.vue";
@@ -109,8 +109,6 @@ const start = async () => {
 };
 
 const stop = () => {
-    try { const ctx = outputCanvas.value?.getContext('2d'); if (ctx && outputCanvas.value) ctx.clearRect(0,0,outputCanvas.value.width,outputCanvas.value.height);} catch(e){}
-
     isRunning.value = false;
 
     if (animationId) {
@@ -124,6 +122,15 @@ const stop = () => {
     }
 
     stopProcessing();
+    
+    // Очищаем canvas белым цветом вместо черного
+    try {
+        const ctx = outputCanvas.value?.getContext('2d');
+        if (ctx && outputCanvas.value) {
+            ctx.fillStyle = '#0f0f10'; // Темный фон приложения
+            ctx.fillRect(0, 0, outputCanvas.value.width, outputCanvas.value.height);
+        }
+    } catch(e) {}
 };
 
 const processLoop = async () => {
@@ -138,8 +145,6 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-    try { const ctx = outputCanvas.value?.getContext('2d'); if (ctx && outputCanvas.value) ctx.clearRect(0,0,outputCanvas.value.width,outputCanvas.value.height);} catch(e){}
-
     stop();
 });
 
