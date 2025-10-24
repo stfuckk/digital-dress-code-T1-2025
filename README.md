@@ -18,10 +18,21 @@ ___
 Стек: Vue 3 + Vite + TensorFlow.js
 
 [![Made with ❤️ for Hackathon](https://img.shields.io/badge/Made%20for-Hackathon-ff69b4.svg)]()
-[![Made with Vue](https://img.shields.io/badge/Made%20with-Vue.js-42b883)](https://vuejs.org/)
-[![TensorFlow.js](https://img.shields.io/badge/TensorFlow.js-ML-orange)](https://www.tensorflow.org/js)
 
 ---
+
+## Быстрый старт (Docker)
+
+### Сборка и запуск одной командой:
+```bash
+docker build -t t1-digital-dress-code . &&\
+docker run --name t1-digital-dress-code -p 3333:4173 -d t1-digital-dress-code:latest
+```
+### Удаление контейнера и образа (очистка):
+```bash
+docker rm t1-digital-dress-code -f &&\
+docker rmi t1-digital-dress-code:latest
+```
 
 ## Старт со сборкой из исходного кода
 
@@ -29,12 +40,6 @@ ___
 
 ```bash
 npm install
-```
-
-### Загрузка модели RVM
-
-```bash
-npm run download-models
 ```
 
 ### Запуск dev-сервера
@@ -59,16 +64,6 @@ npm run build
 npm run preview
 ```
 
-Результат в `dist/`:
-```
-dist/
-├── index.html
-├── assets/
-│   ├── index-[hash].js      # Код приложения
-│   ├── vendor-[hash].js     # Vue
-│   └── ml-[hash].js         # TensorFlow.js + BodyPix
-```
-
 ---
 
 ## Идея
@@ -80,7 +75,8 @@ dist/
 - **Сегментация человека в видео** (real-time, устойчивость к освещению и движению)
 - **Локальный inference** на CPU/GPU
 - Плагины фонов: статический цвет, размытие, изображение
-- Шаблоны пользовательских фонов по категориям
+- Шаблоны пользовательского фона и пресета приватности с отображением редактируемой информации о сотруднике
+- Рисование курсором мыши поверх веб-камеры
 
 ___
 ## Производительность (заготовка)

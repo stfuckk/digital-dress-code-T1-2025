@@ -66,22 +66,6 @@ async function main() {
   } else {
     console.log("Модель уже существует");
   }
-
-  // WASM файлы нужно скачать вручную или использовать CDN
-  console.log("\nИнструкции для WASM файлов:");
-  console.log("1. Скачайте WASM файлы из node_modules/onnxruntime-web/dist/");
-  console.log("2. Скопируйте следующие файлы в public/ort/:");
-  console.log("   - ort-wasm.wasm");
-  console.log("   - ort-wasm-simd.wasm");
-  console.log("   - ort-wasm-threaded.wasm");
-  console.log("   - ort-wasm-simd-threaded.wasm");
-  console.log(
-    "\nИли используйте CDN, изменив env.wasm.wasmPaths в воркере на:",
-  );
-  console.log(
-    'env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.0/dist/";',
-  );
-
   console.log("\nГотово! Теперь запустите npm install && npm run dev");
 }
 
