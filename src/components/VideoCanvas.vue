@@ -121,7 +121,10 @@ const stats = ref({
     latency: 0,
     metrics: { preprocess: 0, inference: 0, postprocess: 0, total: 0 },
     backend: 'wasm',
-    droppedFrames: 0
+    droppedFrames: 0,
+    downsample: 0.25,
+    inferenceShortSide: 0,
+    inferenceResolution: null,
 });
 
 const {
