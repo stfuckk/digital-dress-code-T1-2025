@@ -26,3 +26,5 @@ Thumbs.db
 # Env
 .env
 .env.local
+
+public/models/
