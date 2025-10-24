@@ -31,6 +31,12 @@ ___
 npm install
 ```
 
+### Загрузка модели RVM
+
+```bash
+npm run download-models
+```
+
 ### Запуск dev-сервера
 
 ```bash
