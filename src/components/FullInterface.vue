@@ -182,11 +182,11 @@
                     ref="videoCanvas"
                     :user-info="{
                         name: humanize(employee.full_name),
-                        position:
-                            privacyLevel === 'high'
-                                ? ''
-                                : humanize(employee.position),
+                        position: humanize(employee.position),
                         company: humanize(employee.company),
+                        email: employee.contact.email,
+                        telegram: employee.contact.telegram,
+                        privacyLevel: privacyLevel,
                     }"
                     :background-enabled="backgroundEnabled"
                     :background-config="backgroundConfig"
@@ -208,13 +208,13 @@ const backgroundEnabled = ref(true);
 
 // Employee info per JSON + privacy
 const employee = ref({
-    full_name: "ИвановСергейПетрович",
-    position: "Ведущийинженерпокомпьютерномузрению",
-    company: "ООО«РогаиКопыта»",
-    department: "Департаменткомпьютерногозрения",
-    office_location: "Новосибирск,технопарк«Идея»",
+    full_name: "Иванов Сергей Петрович",
+    position: "Ведущий инженер по компьютерному зрению",
+    company: "ООО «Рога и Копыта»",
+    department: "Департамент компьютерного зрения",
+    office_location: "Новосибирск, технопарк «Идея»",
     contact: { email: "sergey.ivanov@t1dp.ru", telegram: "@sergey_vision" },
-    branding: { slogan: "Инновациивкаждыйкадр" },
+    branding: { slogan: "Инновации в каждый кадр" },
 });
 const privacyLevel = ref("medium");
 
@@ -269,12 +269,7 @@ const backgroundConfig = ref({
 const imageCandidates = [
     "images/office.png",
     "images/home.png",
-    "images/bg1.jpg",
-    "images/bg2.jpg",
-    "images/bg3.jpg",
-    "images/bg1.png",
-    "images/bg2.png",
-    "images/bg3.png",
+    "images/cafe.png",
 ];
 const images = ref([]);
 function probeImages() {
@@ -318,8 +313,8 @@ const presets = [
     {
         id: "friends",
         name: "Дружеская встреча",
-        icon: "🍻",
-        config: { type: "photo", photo: "images/home.png" },
+        icon: "☕",
+        config: { type: "photo", photo: "images/cafe.png" },
         privacy: "low",
     },
     {

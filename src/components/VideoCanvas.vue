@@ -9,14 +9,7 @@
 
         <canvas ref="outputCanvas" class="output-canvas"></canvas>
 
-        <!-- Информация о пользователе -->
-        <UserInfo
-            v-if="userInfo && isRunning"
-            :name="userInfo.name"
-            :position="userInfo.position"
-            :company="userInfo.company"
-            :presentation-mode="presentationMode"
-        />
+        <!-- Информация о пользователе теперь встроена в canvas -->
 
         <!-- Панель статистики -->
         <StatsPanel
@@ -31,7 +24,6 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from "vue";
-import UserInfo from "./UserInfo.vue";
 import StatsPanel from "./StatsPanel.vue";
 import { useBackgroundReplacement } from "../composables/useBackgroundReplacement";
 

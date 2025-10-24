@@ -24,6 +24,10 @@ export function useBackgroundReplacement(
   let lastProcessedMask = null;
   let isProcessing = false;
 
+  // Фоновое изображение
+  const loadedBackgroundImage = { value: null };
+  let currentPhotoUrl = null;
+
   // Создание Web Worker
   const createWorker = () => {
     return new Worker(new URL("../workers/rvm.worker.js", import.meta.url), {
@@ -102,6 +106,99 @@ export function useBackgroundReplacement(
     }
   };
 
+  // Загрузка фонового изображения
+  const loadBackgroundImage = (url) => {
+    if (currentPhotoUrl === url && loadedBackgroundImage.value) {
+      return; // Уже загружено
+    }
+    
+    currentPhotoUrl = url;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      loadedBackgroundImage.value = img;
+      console.log("Фоновое изображение загружено:", url);
+    };
+    img.onerror = () => {
+      console.error("Ошибка загрузки фонового изображения:", url);
+      loadedBackgroundImage.value = null;
+    };
+    img.src = url;
+  };
+
+  const drawUserInfoOnCanvas = (ctx, width, height) => {
+    if (!props.userInfo) return;
+    
+    const { name, position, company, email, telegram, privacyLevel } = props.userInfo;
+    
+    // Позиция текста в левом ВЕРХНЕМ углу
+    const padding = 30;
+    const lineHeight = 45;
+    const smallLineHeight = 30;
+    let yPos = padding + 40; // Начинаем с верха + размер первой строки
+    
+    // Функция для рисования текста с тенью
+    const drawTextWithShadow = (text, x, y, fontSize, color = 'white', weight = '700') => {
+      ctx.font = `${weight} ${fontSize}px 'Segoe UI', sans-serif`;
+      
+      // Тень (несколько слоев для лучшего контраста)
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+      ctx.shadowBlur = 15;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      
+      // Обводка
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 4;
+      ctx.strokeText(text, x, y);
+      
+      // Основной текст
+      ctx.fillStyle = color;
+      ctx.shadowBlur = 8;
+      ctx.fillText(text, x, y);
+      
+      // Сбрасываем тень
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+    };
+    
+    // ВЫСОКИЙ уровень приватности: только компания
+    if (privacyLevel === 'high') {
+      if (company) {
+        drawTextWithShadow(company, padding, yPos, 32, 'white', '700');
+      }
+      return;
+    }
+    
+    // НИЗКИЙ и СРЕДНИЙ уровень: имя, должность, компания
+    if (name) {
+      drawTextWithShadow(name, padding, yPos, 40, 'white', '800');
+      yPos += lineHeight;
+    }
+    
+    if (position) {
+      drawTextWithShadow(position, padding, yPos, 26, '#ffd700', '700');
+      yPos += lineHeight * 0.7;
+    }
+    
+    if (company) {
+      drawTextWithShadow(company, padding, yPos, 20, '#e0e0e0', '600');
+      yPos += smallLineHeight;
+    }
+    
+    // НИЗКИЙ уровень приватности: дополнительно email и telegram
+    if (privacyLevel === 'low') {
+      if (email) {
+        drawTextWithShadow(email, padding, yPos, 18, '#9db4ff', '600');
+        yPos += smallLineHeight;
+      }
+      
+      if (telegram) {
+        drawTextWithShadow(telegram, padding, yPos, 18, '#9db4ff', '600');
+      }
+    }
+  };
+
   const renderMaskToCanvas = (pha, w, h) => {
     if (!outputCanvas.value || !sourceVideo.value) return;
 
@@ -138,8 +235,11 @@ export function useBackgroundReplacement(
       }
       maskCtx.putImageData(imageData, 0, 0);
 
-      // Применяем фон
+      // Применяем фон (текст уже будет на фоне)
       applyBackground(ctx, maskCanvas, videoWidth, videoHeight);
+    } else {
+      // Если фон не включен, рисуем текст поверх видео
+      drawUserInfoOnCanvas(ctx, videoWidth, videoHeight);
     }
   };
 
@@ -160,9 +260,23 @@ export function useBackgroundReplacement(
       const color = hexToRgb(props.backgroundConfig.color);
       ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
       ctx.fillRect(0, 0, width, height);
+    } else if (bgType === "photo" && props.backgroundConfig.photo) {
+      // Фоновое изображение
+      const bgImage = loadedBackgroundImage.value;
+      if (bgImage && bgImage.complete) {
+        // Рисуем изображение, растягивая на весь canvas
+        ctx.drawImage(bgImage, 0, 0, width, height);
+      } else {
+        // Fallback на цвет, если изображение не загружено
+        ctx.fillStyle = "#2e2e2e";
+        ctx.fillRect(0, 0, width, height);
+      }
     }
 
-    // Сохраняем фон
+    // РИСУЕМ ТЕКСТ НА ФОНЕ (до наложения человека)
+    drawUserInfoOnCanvas(ctx, width, height);
+
+    // Сохраняем фон с текстом
     const bgData = ctx.getImageData(0, 0, width, height);
 
     // Восстанавливаем видео
@@ -198,6 +312,11 @@ export function useBackgroundReplacement(
   const processFrame = async () => {
     if (!worker || !isReady || !sourceVideo.value || !outputCanvas.value)
       return;
+
+    // Загружаем фоновое изображение при необходимости
+    if (props.backgroundConfig.type === "photo" && props.backgroundConfig.photo) {
+      loadBackgroundImage(props.backgroundConfig.photo);
+    }
 
     frameSkipCounter++;
     
@@ -281,12 +400,16 @@ export function useBackgroundReplacement(
     stats.value.latency = Math.round(emaLatencyMs);
 
     // CPU (оценка на основе времени обработки)
-    const estimatedCPU = Math.min(
-      100,
-      Math.round((processingTime / 33.33) * 100),
-    );
+    // При 30fps на обработку кадра должно уходить ~33ms
+    // При 60fps на обработку кадра должно уходить ~16ms
+    const targetFrameTime = 1000 / (stats.value.fps || 30);
+    const cpuUsageRatio = Math.min(1, processingTime / targetFrameTime);
+    const estimatedCPU = Math.round(cpuUsageRatio * 100);
+    
+    // Сглаживание с более сильным коэффициентом
+    const smoothingFactor = 0.15;
     stats.value.cpu = Math.round(
-      estimatedCPU * 0.7 + (stats.value.cpu || 0) * 0.3,
+      estimatedCPU * smoothingFactor + (stats.value.cpu || 0) * (1 - smoothingFactor),
     );
 
     // GPU (эмуляция)
