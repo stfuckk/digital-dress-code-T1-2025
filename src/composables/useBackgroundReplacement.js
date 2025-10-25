@@ -4,71 +4,95 @@ export function useBackgroundReplacement(
   stats,
   props,
 ) {
+  // Worker and runtime state
   let worker = null;
   let isInitialized = false;
   let isReady = false;
-  let backendType = 'wasm';
+  let backendType = "wasm";
+  let emaLatencyMs = 28;
 
-  // Performance & frame pacing
+  // Frame statistics
   let frameCount = 0;
   let fpsHistory = [];
   let lastFpsTime = Date.now();
   let fpsFrameCount = 0;
   let droppedFrames = 0;
-  const TARGET_FPS = 30;
-  const MAX_FRAME_TIME = 33; // ms, for 30 FPS
-  
-  // Optimized model parameters
-  const INFERENCE_SIZE = 320; // Better quality while maintaining speed
-  const downsample = 0.25; // Aggressive downsampling
-  const threads = 4; // Max threads for performance
-  
-  // Drawing on background
-  let drawingCanvas = null;
-  let isDrawingEnabled = false;
-  
-  // Latest mask for reuse
-  let lastProcessedMask = null;
-  let isProcessing = false;
 
-  // Background image
+  const TARGET_FPS = 30;
+
+  const BASE_TARGET_SHORT = 256;
+  let currentTargetShort = BASE_TARGET_SHORT;
+
+  const BASE_DOWNSAMPLE = 0.45;
+  let currentDownsample = BASE_DOWNSAMPLE;
+  const threads = 4;
+  const PROCESS_EVERY_N_FRAMES = props.presentationMode ? 1 : 2;
+
+  const supportsOffscreenCanvas = typeof OffscreenCanvas !== "undefined";
+
+  const processingSurface = createCanvasCache(supportsOffscreenCanvas);
+  const maskSurface = createCanvasCache();
+  const scaledMaskSurface = createCanvasCache();
+  const backgroundSurface = createCanvasCache();
+  const foregroundSurface = createCanvasCache();
+
   const loadedBackgroundImage = { value: null };
   let currentPhotoUrl = null;
-  
-  
-  // Render dynamic blur background (updates every frame)
+
+  let lastProcessedMask = null;
+  let isProcessing = false;
+  let frameSequence = 0;
+
+  let drawingCanvas = null;
+  let isDrawingEnabled = false;
+
+  // Background blur helper
   function renderBlur(ctx, width, height) {
     const blurAmount = props.backgroundConfig.blurAmount || 15;
-    
-    // Apply blur filter directly to current video frame
     ctx.filter = `blur(${blurAmount}px)`;
     ctx.drawImage(sourceVideo.value, 0, 0, width, height);
     ctx.filter = "none";
   }
 
-  // Create Web Worker
-  const createWorker = () => {
+  function createWorker() {
     return new Worker(new URL("../workers/rvm.worker.js", import.meta.url), {
       type: "module",
     });
-  };
+  }
 
   const initialize = async () => {
     if (isInitialized) return;
 
     try {
-      console.log("🚀 Initializing optimized RVM model...");
-
+      console.log("🚀 Initializing background replacement pipeline...");
       worker = createWorker();
 
-      // Setup worker message handlers
       worker.onmessage = (e) => {
         const msg = e.data;
 
         if (msg.type === "ready") {
           isReady = true;
-          backendType = msg.config?.backend || 'wasm';
-          console.log(`✓ Model ready! Backend: ${backendType.toUpperCase()}`);
+          backendType = msg.config?.backend || "wasm";
+          currentDownsample = msg.config?.downsample ?? currentDownsample;
+          console.log(
+            `✓ Model ready (backend: ${backendType}, downsample: ${currentDownsample.toFixed(2)})`,
+          );
+          stats.value.backend = backendType;
+          stats.value.downsample = currentDownsample;
+          stats.value.inferenceShortSide = currentTargetShort;
+          syncWorkerDownsample(true);
+          return;
+        }
+
+        if (msg.type === "config-ok") {
+          const newDownsample = msg.config?.downsample;
+          if (typeof newDownsample === "number" && !Number.isNaN(newDownsample)) {
+            currentDownsample = newDownsample;
+            stats.value.downsample = newDownsample;
+          }
+          if (msg.config?.reset) {
+            lastProcessedMask = null;
+          }
           return;
         }
 
@@ -86,46 +110,45 @@ export function useBackgroundReplacement(
         if (msg.type === "result") {
           const pha = new Float32Array(msg.pha);
           const dims = msg.shape;
-          const h = dims[2], w = dims[3];
-          const metrics = msg.metrics || { total: 0, preprocess: 0, inference: 0, postprocess: 0 };
+          const h = dims[2];
+          const w = dims[3];
+          const metrics = msg.metrics || {
+            total: emaLatencyMs,
+            preprocess: 0,
+            inference: 0,
+            postprocess: 0,
+          };
 
-          // Save mask for reuse
+          emaLatencyMs = 0.8 * emaLatencyMs + 0.2 * (metrics.total || emaLatencyMs);
+
           lastProcessedMask = { pha, w, h };
-
-          // Render to canvas
           renderMaskToCanvas(pha, w, h);
-
-          // Update stats with detailed metrics
           updateFrameStats(metrics);
-          
+
           isProcessing = false;
         }
       };
 
-      // Initialize model
       const modelUrl = "/models/rvm_mobilenetv3_fp32.onnx";
-
       worker.postMessage({
         type: "init",
         modelUrl,
-        downsample,
+        downsample: currentDownsample,
         threads,
       });
 
       isInitialized = true;
-      console.log("✅ Model initialized!");
     } catch (error) {
       console.error("❌ Model initialization error:", error);
       throw error;
     }
   };
 
-  // Загрузка фонового изображения
   const loadBackgroundImage = (url) => {
     if (currentPhotoUrl === url && loadedBackgroundImage.value) {
-      return; // Уже загружено
+      return;
     }
-    
+
     currentPhotoUrl = url;
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -140,87 +163,6 @@ export function useBackgroundReplacement(
     img.src = url;
   };
 
-  const drawUserInfoOnCanvas = (ctx, width, height) => {
-    if (!props.userInfo) return;
-    
-    const { name, position, company, email, telegram, privacyLevel } = props.userInfo;
-    
-    // Позиция текста в левом ВЕРХНЕМ углу
-    const padding = 30;
-    const lineHeight = 45;
-    const smallLineHeight = 30;
-    let yPos = padding + 40; // Начинаем с верха + размер первой строки
-    
-    // Функция для рисования текста с тенью
-    const drawTextWithShadow = (text, x, y, fontSize, color = 'white', weight = '700') => {
-      ctx.font = `${weight} ${fontSize}px 'Segoe UI', sans-serif`;
-      
-      // Тень (несколько слоев для лучшего контраста)
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-      ctx.shadowBlur = 15;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
-      
-      // Обводка
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 4;
-      ctx.strokeText(text, x, y);
-      
-      // Основной текст
-      ctx.fillStyle = color;
-      ctx.shadowBlur = 8;
-      ctx.fillText(text, x, y);
-      
-      // Сбрасываем тень
-      ctx.shadowColor = 'transparent';
-      ctx.shadowBlur = 0;
-    };
-    
-    // МИНИМАЛЬНЫЙ уровень приватности: только ФИО
-    if (privacyLevel === 'minimal') {
-      if (name) {
-        drawTextWithShadow(name, padding, yPos, 40, 'white', '800');
-      }
-      return;
-    }
-    
-    // ВЫСОКИЙ уровень приватности: только компания
-    if (privacyLevel === 'high') {
-      if (company) {
-        drawTextWithShadow(company, padding, yPos, 32, 'white', '700');
-      }
-      return;
-    }
-    
-    // НИЗКИЙ и СРЕДНИЙ уровень: имя, должность, компания
-    if (name) {
-      drawTextWithShadow(name, padding, yPos, 40, 'white', '800');
-      yPos += lineHeight;
-    }
-    
-    if (position) {
-      drawTextWithShadow(position, padding, yPos, 26, '#ffd700', '700');
-      yPos += lineHeight * 0.7;
-    }
-    
-    if (company) {
-      drawTextWithShadow(company, padding, yPos, 20, '#e0e0e0', '600');
-      yPos += smallLineHeight;
-    }
-    
-    // НИЗКИЙ уровень приватности: дополнительно email и telegram
-    if (privacyLevel === 'low') {
-      if (email) {
-        drawTextWithShadow(email, padding, yPos, 18, '#9db4ff', '600');
-        yPos += smallLineHeight;
-      }
-      
-      if (telegram) {
-        drawTextWithShadow(telegram, padding, yPos, 18, '#9db4ff', '600');
-      }
-    }
-  };
-
   const renderMaskToCanvas = (pha, w, h) => {
     if (!outputCanvas.value || !sourceVideo.value) return;
 
@@ -230,101 +172,93 @@ export function useBackgroundReplacement(
 
     if (!videoWidth || !videoHeight) return;
 
-    // Масштабируем canvas под видео
     outputCanvas.value.width = videoWidth;
     outputCanvas.value.height = videoHeight;
 
-    // Рисуем видео
     ctx.drawImage(sourceVideo.value, 0, 0, videoWidth, videoHeight);
 
-    if (props.backgroundEnabled) {
-      // Создаем временный canvas для маски
-      const maskCanvas = document.createElement("canvas");
-      maskCanvas.width = w;
-      maskCanvas.height = h;
-      const maskCtx = maskCanvas.getContext("2d");
-
-      const imageData = maskCtx.createImageData(w, h);
-      const data = imageData.data;
-
-      // Заполняем альфа-канал из маски
-      for (let i = 0; i < w * h; i++) {
-        const alpha = Math.max(0, Math.min(255, Math.round(pha[i] * 255)));
-        data[i * 4] = alpha;
-        data[i * 4 + 1] = alpha;
-        data[i * 4 + 2] = alpha;
-        data[i * 4 + 3] = 255;
-      }
-      maskCtx.putImageData(imageData, 0, 0);
-
-      // Применяем фон (текст уже будет на фоне)
-      applyBackground(ctx, maskCanvas, videoWidth, videoHeight);
-    } else {
-      // Если фон не включен, рисуем текст поверх видео
+    if (!props.backgroundEnabled) {
       drawUserInfoOnCanvas(ctx, videoWidth, videoHeight);
+      return;
     }
+
+    const mask = ensureMaskImageData(maskSurface, w, h);
+    const data = mask.data;
+
+    const SOFT_START = 0.08;
+    const HARD_START = 0.4;
+    for (let i = 0; i < w * h; i++) {
+      let alpha = pha[i];
+      if (alpha <= SOFT_START) {
+        alpha = 0;
+      } else if (alpha >= HARD_START) {
+        alpha = 1;
+      } else {
+        alpha = (alpha - SOFT_START) / (HARD_START - SOFT_START);
+      }
+      const byte = Math.round(alpha * 255);
+      const idx = i * 4;
+      data[idx] = 0;
+      data[idx + 1] = 0;
+      data[idx + 2] = 0;
+      data[idx + 3] = byte;
+    }
+
+    maskSurface.ctx.putImageData(mask, 0, 0);
+    applyBackground(ctx, maskSurface.canvas, videoWidth, videoHeight);
   };
 
   const applyBackground = (ctx, maskCanvas, width, height) => {
+    const bgSurface = ensureCanvas(backgroundSurface, width, height);
+    const bgCtx = bgSurface.ctx;
     const bgType = props.backgroundConfig.type;
 
-    // Save original video
-    const videoData = ctx.getImageData(0, 0, width, height);
-
-    // Create background
     if (bgType === "blur") {
-      renderBlur(ctx, width, height);
+      renderBlur(bgCtx, width, height);
     } else if (bgType === "color") {
       const color = hexToRgb(props.backgroundConfig.color);
-      ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
-      ctx.fillRect(0, 0, width, height);
+      bgCtx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
+      bgCtx.fillRect(0, 0, width, height);
     } else if (bgType === "photo" && props.backgroundConfig.photo) {
       const bgImage = loadedBackgroundImage.value;
       if (bgImage && bgImage.complete) {
-        ctx.drawImage(bgImage, 0, 0, width, height);
+        bgCtx.drawImage(bgImage, 0, 0, width, height);
       } else {
-        ctx.fillStyle = "#2e2e2e";
-        ctx.fillRect(0, 0, width, height);
+        bgCtx.fillStyle = "#2e2e2e";
+        bgCtx.fillRect(0, 0, width, height);
       }
+    } else {
+      bgCtx.fillStyle = "#111";
+      bgCtx.fillRect(0, 0, width, height);
     }
 
-    // Draw custom drawing on background if enabled
     if (isDrawingEnabled && drawingCanvas) {
-      ctx.drawImage(drawingCanvas, 0, 0, width, height);
+      bgCtx.drawImage(drawingCanvas, 0, 0, width, height);
     }
 
-    // Draw user info on background (before compositing person)
-    drawUserInfoOnCanvas(ctx, width, height);
+    drawUserInfoOnCanvas(bgCtx, width, height);
 
-    // Save background with text and drawings
-    const bgData = ctx.getImageData(0, 0, width, height);
+    const maskScaledSurface = ensureCanvas(scaledMaskSurface, width, height);
+    const scaledCtx = maskScaledSurface.ctx;
+    scaledCtx.imageSmoothingEnabled = true;
+    scaledCtx.imageSmoothingQuality = "medium";
+    scaledCtx.clearRect(0, 0, width, height);
+    scaledCtx.filter = "blur(0.8px)";
+    scaledCtx.drawImage(maskCanvas, 0, 0, width, height);
+    scaledCtx.filter = "none";
 
-    // Restore video
-    ctx.putImageData(videoData, 0, 0);
+    const fgSurface = ensureCanvas(foregroundSurface, width, height);
+    const fgCtx = fgSurface.ctx;
+    fgCtx.clearRect(0, 0, width, height);
+    fgCtx.globalCompositeOperation = "source-over";
+    fgCtx.drawImage(sourceVideo.value, 0, 0, width, height);
+    fgCtx.globalCompositeOperation = "destination-in";
+    fgCtx.drawImage(maskScaledSurface.canvas, 0, 0);
+    fgCtx.globalCompositeOperation = "source-over";
 
-    // Scale mask to video size with bilinear interpolation
-    const scaledMaskCanvas = document.createElement("canvas");
-    scaledMaskCanvas.width = width;
-    scaledMaskCanvas.height = height;
-    const scaledMaskCtx = scaledMaskCanvas.getContext("2d");
-    scaledMaskCtx.imageSmoothingEnabled = true;
-    scaledMaskCtx.imageSmoothingQuality = 'high';
-    scaledMaskCtx.drawImage(maskCanvas, 0, 0, width, height);
-    const maskData = scaledMaskCtx.getImageData(0, 0, width, height);
-
-    // Compositing: blend foreground and background by mask
-    const resultData = ctx.createImageData(width, height);
-    for (let i = 0; i < width * height; i++) {
-      const idx = i * 4;
-      const alpha = maskData.data[idx] / 255;
-
-      resultData.data[idx] = videoData.data[idx] * alpha + bgData.data[idx] * (1 - alpha);
-      resultData.data[idx + 1] = videoData.data[idx + 1] * alpha + bgData.data[idx + 1] * (1 - alpha);
-      resultData.data[idx + 2] = videoData.data[idx + 2] * alpha + bgData.data[idx + 2] * (1 - alpha);
-      resultData.data[idx + 3] = 255;
-    }
-
-    ctx.putImageData(resultData, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(bgSurface.canvas, 0, 0);
+    ctx.drawImage(fgSurface.canvas, 0, 0);
   };
 
   const processFrame = async () => {
@@ -332,21 +266,37 @@ export function useBackgroundReplacement(
       return;
     }
 
-    // Load background image if needed
-    if (props.backgroundConfig.type === "photo" && props.backgroundConfig.photo) {
+    if (
+      props.backgroundConfig.type === "photo" &&
+      props.backgroundConfig.photo
+    ) {
       loadBackgroundImage(props.backgroundConfig.photo);
     }
 
-    // Drop frame if still processing (frame pacing)
     if (isProcessing) {
       droppedFrames++;
-      // Reuse last mask
       if (lastProcessedMask) {
-        renderMaskToCanvas(lastProcessedMask.pha, lastProcessedMask.w, lastProcessedMask.h);
+        renderMaskToCanvas(
+          lastProcessedMask.pha,
+          lastProcessedMask.w,
+          lastProcessedMask.h,
+        );
       }
       return;
     }
-    
+
+    frameSequence++;
+    if (PROCESS_EVERY_N_FRAMES > 1 && frameSequence % PROCESS_EVERY_N_FRAMES !== 0) {
+      if (lastProcessedMask) {
+        renderMaskToCanvas(
+          lastProcessedMask.pha,
+          lastProcessedMask.w,
+          lastProcessedMask.h,
+        );
+      }
+      return;
+    }
+
     isProcessing = true;
 
     const video = sourceVideo.value;
@@ -358,52 +308,67 @@ export function useBackgroundReplacement(
       return;
     }
 
-    // Downscale to INFERENCE_SIZE (256-320p) for speed
-    const { w, h } = calcScaledSize(vw, vh, INFERENCE_SIZE);
+    const { w, h } = calcScaledSize(vw, vh, currentTargetShort);
+    const processing = ensureCanvas(processingSurface, w, h);
 
-    // Use OffscreenCanvas and transferToImageBitmap for zero-copy
-    const offscreen = new OffscreenCanvas(w, h);
-    const offscreenCtx = offscreen.getContext("2d");
-    offscreenCtx.drawImage(video, 0, 0, w, h);
+    stats.value.inferenceShortSide = Math.min(w, h);
+    stats.value.inferenceResolution = `${w}x${h}`;
+    stats.value.downsample = currentDownsample;
+    stats.value.backend = backendType;
 
-    // Transfer bitmap to worker (zero-copy transfer)
-    const bitmap = offscreen.transferToImageBitmap();
-    worker.postMessage({ 
-      type: "run", 
-      bitmap
-    }, [bitmap]);
+    processing.ctx.drawImage(video, 0, 0, w, h);
+
+    let bitmap;
+    if (supportsOffscreenCanvas && "transferToImageBitmap" in processing.canvas) {
+      bitmap = processing.canvas.transferToImageBitmap();
+    } else {
+      bitmap = await createImageBitmap(processing.canvas);
+    }
+
+    worker.postMessage({ type: "run", bitmap }, [bitmap]);
   };
 
   const calcScaledSize = (videoWidth, videoHeight, targetShortSide) => {
     const aspectRatio = videoWidth / videoHeight;
-    let w, h;
+    const shortSide = Math.min(videoWidth, videoHeight);
+    const target = Math.max(1, Math.min(targetShortSide, shortSide));
+    let width;
+    let height;
 
-    if (videoWidth < videoHeight) {
-      w = targetShortSide;
-      h = Math.round(targetShortSide / aspectRatio);
+    if (videoWidth <= videoHeight) {
+      width = target;
+      height = Math.round(target / aspectRatio);
     } else {
-      h = targetShortSide;
-      w = Math.round(targetShortSide * aspectRatio);
+      height = target;
+      width = Math.round(target * aspectRatio);
     }
-    
-    return { w, h };
+
+    const align = (value) => {
+      const STEP = 16;
+      const aligned = Math.floor(value / STEP) * STEP;
+      return Math.max(STEP, aligned);
+    };
+
+    width = align(width);
+    height = align(height);
+
+    return { w: width, h: height };
   };
 
   const updateFrameStats = (metrics) => {
     frameCount++;
     fpsFrameCount++;
 
-    // Update detailed metrics
     stats.value.metrics = {
-      preprocess: metrics.preprocess || 0,
-      inference: metrics.inference || 0,
-      postprocess: metrics.postprocess || 0,
-      total: metrics.total || 0
+      preprocess: metrics.preprocess ?? 0,
+      inference: metrics.inference ?? 0,
+      postprocess: metrics.postprocess ?? 0,
+      total: metrics.total ?? 0,
     };
     stats.value.backend = backendType;
+    stats.value.downsample = currentDownsample;
     stats.value.droppedFrames = droppedFrames;
 
-    // FPS calculation
     const now = Date.now();
     if (now - lastFpsTime >= 1000) {
       const fps = fpsFrameCount;
@@ -423,30 +388,29 @@ export function useBackgroundReplacement(
       lastFpsTime = now;
     }
 
-    // Legacy stats for compatibility
-    stats.value.latency = Math.round(metrics.total || 0);
-    
+    stats.value.latency = Math.round(emaLatencyMs);
+
     const targetFrameTime = 1000 / TARGET_FPS;
-    const cpuUsageRatio = Math.min(1, (metrics.total || 0) / targetFrameTime);
-    const estimatedCPU = Math.round(cpuUsageRatio * 100);
-    
-    const smoothingFactor = 0.15;
+    const loadRatio = Math.min(1, emaLatencyMs / targetFrameTime);
+    const estimatedCPU = Math.round(loadRatio * 100);
+    const smoothingFactor = 0.18;
     stats.value.cpu = Math.round(
-      estimatedCPU * smoothingFactor + (stats.value.cpu || 0) * (1 - smoothingFactor),
+      estimatedCPU * smoothingFactor +
+        (stats.value.cpu || 0) * (1 - smoothingFactor),
     );
 
-    stats.value.gpu = Math.min(100, Math.round(Math.random() * 30 + 15));
-  };
+    const gpuEstimate =
+      backendType === "webgl"
+        ? Math.min(100, Math.round(35 + loadRatio * 55))
+        : Math.min(100, Math.round(20 + loadRatio * 45));
+    stats.value.gpu = Math.round(
+      gpuEstimate * smoothingFactor +
+        (stats.value.gpu || 0) * (1 - smoothingFactor),
+    );
 
-  const hexToRgb = (hex) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result
-      ? {
-          r: parseInt(result[1], 16),
-          g: parseInt(result[2], 16),
-          b: parseInt(result[3], 16),
-        }
-      : { r: 0, g: 255, b: 0 };
+    stats.value.downsample = currentDownsample;
+
+    // Fixed resolution mode – no dynamic scaling
   };
 
   const start = () => {
@@ -461,35 +425,212 @@ export function useBackgroundReplacement(
     frameCount = 0;
     fpsHistory = [];
     droppedFrames = 0;
-    stats.value = { 
-      cpu: 0, 
-      gpu: 0, 
-      fps: 0, 
-      avgFps: 0, 
+    lastProcessedMask = null;
+    isProcessing = false;
+    emaLatencyMs = 28;
+    currentTargetShort = BASE_TARGET_SHORT;
+    currentDownsample = BASE_DOWNSAMPLE;
+    stats.value = {
+      cpu: 0,
+      gpu: 0,
+      fps: 0,
+      avgFps: 0,
       latency: 0,
       metrics: { preprocess: 0, inference: 0, postprocess: 0, total: 0 },
       backend: backendType,
-      droppedFrames: 0
+      downsample: currentDownsample,
+      droppedFrames: 0,
+      inferenceShortSide: currentTargetShort,
+      inferenceResolution: null,
     };
+    frameSequence = 0;
   };
 
-
   const setDrawingCanvas = (canvas) => {
-    drawingCanvas = canvas;
-    console.log('✓ Drawing canvas set');
+    drawingCanvas = canvas || null;
+    console.log("✓ Drawing canvas set");
   };
 
   const enableDrawing = (enabled) => {
-    isDrawingEnabled = enabled;
-    console.log(`✓ Drawing ${enabled ? 'enabled' : 'disabled'}`);
+    isDrawingEnabled = !!enabled;
+    console.log(`✓ Drawing ${enabled ? "enabled" : "disabled"}`);
   };
 
   const clearDrawing = () => {
     if (drawingCanvas) {
-      const ctx = drawingCanvas.getContext('2d');
+      const ctx = drawingCanvas.getContext("2d");
       ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
-      console.log('✓ Drawing cleared');
+      console.log("✓ Drawing cleared");
     }
+  };
+
+  const syncWorkerDownsample = (force = false) => {
+    if (!worker || !isReady) return;
+    const desired = BASE_DOWNSAMPLE;
+    if (force || Math.abs(desired - currentDownsample) > 1e-6) {
+      currentDownsample = desired;
+      stats.value.downsample = currentDownsample;
+      worker.postMessage({
+        type: "config",
+        downsample: currentDownsample,
+        resetState: true,
+      });
+      lastProcessedMask = null;
+    }
+  };
+
+  function computeDownsampleForShortSide(shortSide) {
+    return BASE_DOWNSAMPLE;
+  }
+
+  function createCanvasCache(useOffscreen = false) {
+    return {
+      useOffscreen,
+      canvas: null,
+      ctx: null,
+      imageData: null,
+    };
+  }
+
+  function ensureCanvas(surface, width, height, contextOptions) {
+    if (!surface.canvas) {
+      surface.canvas = createCanvas(surface.useOffscreen, width, height);
+    }
+
+    if (
+      surface.canvas.width !== width ||
+      surface.canvas.height !== height
+    ) {
+      surface.canvas.width = width;
+      surface.canvas.height = height;
+      surface.imageData = null;
+    }
+
+    if (!surface.ctx) {
+      surface.ctx = surface.canvas.getContext("2d", contextOptions || undefined);
+      if (!surface.ctx) {
+        throw new Error("Не удалось получить контекст Canvas");
+      }
+    }
+
+    surface.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    surface.ctx.clearRect(0, 0, width, height);
+    return surface;
+  }
+
+  function ensureMaskImageData(surface, width, height) {
+    ensureCanvas(surface, width, height, { willReadFrequently: true });
+    if (
+      !surface.imageData ||
+      surface.imageData.width !== width ||
+      surface.imageData.height !== height
+    ) {
+      surface.imageData = surface.ctx.createImageData(width, height);
+    }
+    return surface.imageData;
+  }
+
+  function createCanvas(useOffscreen, width, height) {
+    if (useOffscreen && supportsOffscreenCanvas) {
+      return new OffscreenCanvas(width, height);
+    }
+    if (typeof document === "undefined") {
+      throw new Error("Canvas API недоступна в текущей среде");
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  }
+
+  const drawUserInfoOnCanvas = (ctx, width, height) => {
+    if (!props.userInfo) return;
+
+    const { name, position, company, email, telegram, privacyLevel } =
+      props.userInfo;
+
+    const padding = 30;
+    const lineHeight = 45;
+    const smallLineHeight = 30;
+    let yPos = padding + 40;
+
+    const drawTextWithShadow = (
+      text,
+      x,
+      y,
+      fontSize,
+      color = "white",
+      weight = "700",
+    ) => {
+      ctx.font = `${weight} ${fontSize}px 'Segoe UI', sans-serif`;
+
+      ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+      ctx.shadowBlur = 15;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 4;
+      ctx.strokeText(text, x, y);
+
+      ctx.fillStyle = color;
+      ctx.shadowBlur = 8;
+      ctx.fillText(text, x, y);
+
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    };
+
+    if (privacyLevel === "minimal") {
+      if (name) {
+        drawTextWithShadow(name, padding, yPos, 40, "white", "800");
+      }
+      return;
+    }
+
+    if (privacyLevel === "high") {
+      if (company) {
+        drawTextWithShadow(company, padding, yPos, 32, "white", "700");
+      }
+      return;
+    }
+
+    if (name) {
+      drawTextWithShadow(name, padding, yPos, 40, "white", "800");
+      yPos += lineHeight;
+    }
+
+    if (position) {
+      drawTextWithShadow(position, padding, yPos, 26, "#ffd700", "700");
+      yPos += lineHeight * 0.7;
+    }
+
+    if (company) {
+      drawTextWithShadow(company, padding, yPos, 20, "#e0e0e0", "600");
+      yPos += smallLineHeight;
+    }
+
+    if (privacyLevel === "low") {
+      if (email) {
+        drawTextWithShadow(email, padding, yPos, 18, "#9db4ff", "600");
+        yPos += smallLineHeight;
+      }
+
+      if (telegram) {
+        drawTextWithShadow(telegram, padding, yPos, 18, "#9db4ff", "600");
+      }
+    }
+  };
+
+  const hexToRgb = (hex) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result
+      ? {
+          r: parseInt(result[1], 16),
+          g: parseInt(result[2], 16),
+          b: parseInt(result[3], 16),
+        }
+      : { r: 0, g: 255, b: 0 };
   };
 
   return {

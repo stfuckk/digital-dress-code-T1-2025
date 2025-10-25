@@ -12,15 +12,19 @@ let r1 = null, r2 = null, r3 = null, r4 = null;
 
 // Temporal stabilization
 let prevMask = null;
-const TEMPORAL_ALPHA = 0.75; // EMA coefficient (higher = more current frame, less ghosting)
+const TEMPORAL_ALPHA = 0.65;
 let framesSinceReset = 0;
-const RESET_INTERVAL = 150; // Reset temporal state every 150 frames (~5 seconds at 30fps)
+const RESET_INTERVAL = 150;
+const EDGE_GAMMA = 0.82;
+const FOREGROUND_PUSH = 0.08;
+const MIN_FOREGROUND = 0.02;
 
 // Buffer reuse
 let tensorCache = {
   inputBuffer: null,
   inputShape: null,
   downsampleTensor: null,
+  downsampleBuffer: null,
 };
 
 // Pipeline state
@@ -36,15 +40,24 @@ let perfMetrics = {
 };
 
 // Optimized tensor conversion with buffer reuse
-function imageBitmapToTensor(bitmap) {
+async function imageBitmapToTensor(bitmap) {
+  if (typeof Tensor?.fromImageBitmap === "function") {
+    const tensor = await Tensor.fromImageBitmap(bitmap, {
+      dataType: "float32",
+      colorFormat: "RGB",
+      tensorFormat: "NCHW",
+    });
+    return tensor;
+  }
+
   const width = bitmap.width;
   const height = bitmap.height;
   const size = width * height;
 
-  // Reuse buffer if same shape
-  const needsRealloc = !tensorCache.inputBuffer || 
-                       tensorCache.inputShape?.[0] !== height ||
-                       tensorCache.inputShape?.[1] !== width;
+  const needsRealloc =
+    !tensorCache.inputBuffer ||
+    tensorCache.inputShape?.[0] !== height ||
+    tensorCache.inputShape?.[1] !== width;
 
   if (needsRealloc) {
     tensorCache.inputBuffer = new Float32Array(3 * size);
@@ -63,7 +76,6 @@ function imageBitmapToTensor(bitmap) {
   const gOffset = size;
   const bOffset = 2 * size;
 
-  // Optimized loop
   for (let i = 0; i < size; i++) {
     const p = i * 4;
     tensorData[i] = pixels[p] / 255.0;
@@ -147,16 +159,33 @@ function morphologicalClose(data, width, height, kernelSize = 3) {
 }
 
 // Post-process mask with temporal stabilization and optional morphological filtering
+function refineMaskEdges(mask) {
+  const len = mask.length;
+  for (let i = 0; i < len; i++) {
+    let v = mask[i];
+    v = Math.pow(v, EDGE_GAMMA);
+    if (v < MIN_FOREGROUND) {
+      v = v + MIN_FOREGROUND * 0.6;
+    }
+    v = Math.min(1, v + FOREGROUND_PUSH * v * (1 - v));
+    mask[i] = v;
+  }
+  return mask;
+}
+
 function postProcessMask(phaData, width, height, enableMorph = false) {
   const t0 = performance.now();
   
-  // Apply temporal stabilization (EMA) - this is fast and effective
   let processed = applyTemporalStabilization(phaData, width, height);
   
-  // Optional: apply morphological close to reduce flicker (disabled by default for speed)
-  // Temporal stabilization already provides good smoothing
   if (enableMorph) {
     processed = morphologicalClose(processed, width, height, 2); // Small kernel
+  }
+
+  processed = refineMaskEdges(processed);
+
+  if (prevMask && prevMask.length === processed.length) {
+    prevMask.set(processed);
   }
   
   perfMetrics.postprocess = performance.now() - t0;
@@ -191,6 +220,72 @@ async function prewarmModel(width, height) {
   dummyBitmap.close();
   
   console.log("[Worker] Model pre-warming complete");
+}
+
+async function processBitmap(bitmap) {
+  isProcessing = true;
+  const frameStart = performance.now();
+
+  try {
+    const tPreStart = performance.now();
+    const srcTensor = await imageBitmapToTensor(bitmap);
+    perfMetrics.preprocess = performance.now() - tPreStart;
+
+    const z = new Float32Array(1);
+    const zShape = [1, 1, 1, 1];
+
+    const feeds = {
+      src: srcTensor,
+      downsample_ratio: tensorCache.downsampleTensor,
+      r1i: r1 ?? new Tensor("float32", z, zShape),
+      r2i: r2 ?? new Tensor("float32", z, zShape),
+      r3i: r3 ?? new Tensor("float32", z, zShape),
+      r4i: r4 ?? new Tensor("float32", z, zShape),
+    };
+
+    const tInfStart = performance.now();
+    const outputs = await session.run(feeds);
+    perfMetrics.inference = performance.now() - tInfStart;
+
+    r1 = outputs.r1o;
+    r2 = outputs.r2o;
+    r3 = outputs.r3o;
+    r4 = outputs.r4o;
+
+    const pha = outputs.pha;
+    const w = pha.dims[3];
+    const h = pha.dims[2];
+
+    const processedPha = postProcessMask(pha.data, w, h, false);
+    perfMetrics.total = performance.now() - frameStart;
+
+    self.postMessage(
+      {
+        type: "result",
+        pha: processedPha,
+        shape: pha.dims,
+        metrics: {
+          preprocess: perfMetrics.preprocess,
+          inference: perfMetrics.inference,
+          postprocess: perfMetrics.postprocess,
+          total: perfMetrics.total,
+        },
+      },
+      [processedPha.buffer],
+    );
+  } catch (error) {
+    self.postMessage({ type: "error", message: `Worker error: ${error}` });
+    console.error("Worker error:", error);
+  } finally {
+    bitmap.close();
+    isProcessing = false;
+  }
+
+  if (pendingFrame) {
+    const nextFrame = pendingFrame;
+    pendingFrame = null;
+    processBitmap(nextFrame);
+  }
 }
 
 self.onmessage = async (e) => {
@@ -266,8 +361,13 @@ self.onmessage = async (e) => {
       }
 
       // Set downsample ratio and cache tensor
-      downsample = msg.downsample ?? 0.25; // Lower = faster (256-320p inference)
-      tensorCache.downsampleTensor = new Tensor("float32", new Float32Array([downsample]), [1]);
+      downsample = msg.downsample ?? 0.25;
+      tensorCache.downsampleBuffer = new Float32Array([downsample]);
+      tensorCache.downsampleTensor = new Tensor(
+        "float32",
+        tensorCache.downsampleBuffer,
+        [1],
+      );
       
       r1 = r2 = r3 = r4 = null;
       prevMask = null;
@@ -309,87 +409,62 @@ self.onmessage = async (e) => {
       return;
     }
 
+    if (msg.type === "config") {
+      let updated = false;
+      if (typeof msg.downsample === "number" && !Number.isNaN(msg.downsample)) {
+        const clamped = Math.min(0.6, Math.max(0.12, msg.downsample));
+        if (Math.abs(clamped - downsample) > 1e-3) {
+          downsample = clamped;
+          if (!tensorCache.downsampleBuffer) {
+            tensorCache.downsampleBuffer = new Float32Array([downsample]);
+            tensorCache.downsampleTensor = new Tensor(
+              "float32",
+              tensorCache.downsampleBuffer,
+              [1],
+            );
+          } else {
+            tensorCache.downsampleBuffer[0] = downsample;
+          }
+          updated = true;
+        }
+      }
+
+      if (msg.resetState) {
+        r1 = r2 = r3 = r4 = null;
+        prevMask = null;
+        framesSinceReset = 0;
+        updated = true;
+      }
+
+      if (updated) {
+        console.log(
+          `[Worker] Downsample updated to ${downsample.toFixed(3)}, state reset: ${Boolean(msg.resetState)}`,
+        );
+      }
+
+      self.postMessage({
+        type: "config-ok",
+        config: { downsample, reset: Boolean(msg.resetState) },
+      });
+      return;
+    }
+
     if (msg.type === "run") {
       if (!session) {
         self.postMessage({ type: "error", message: "Session not initialized" });
         return;
       }
 
-      // Pipeline parallelism: if already processing, queue this frame
+      // Pipeline parallelism: if already processing, queue newest frame
       if (isProcessing) {
         if (pendingFrame) {
-          pendingFrame.close(); // Drop old pending frame
+          pendingFrame.close();
         }
         pendingFrame = msg.bitmap;
         return;
       }
 
-      isProcessing = true;
-      const t0 = performance.now();
-
-      // Preprocessing
-      const tPreStart = performance.now();
-      const srcTensor = imageBitmapToTensor(msg.bitmap);
-      perfMetrics.preprocess = performance.now() - tPreStart;
-
-      // Initial states for RVM
-      const z = new Float32Array(1);
-      const zShape = [1, 1, 1, 1];
-
-      const feeds = {
-        src: srcTensor,
-        downsample_ratio: tensorCache.downsampleTensor,
-        r1i: r1 ?? new Tensor("float32", z, zShape),
-        r2i: r2 ?? new Tensor("float32", z, zShape),
-        r3i: r3 ?? new Tensor("float32", z, zShape),
-        r4i: r4 ?? new Tensor("float32", z, zShape),
-      };
-
-      // Inference
-      const tInfStart = performance.now();
-      const outputs = await session.run(feeds);
-      perfMetrics.inference = performance.now() - tInfStart;
-
-      r1 = outputs.r1o;
-      r2 = outputs.r2o;
-      r3 = outputs.r3o;
-      r4 = outputs.r4o;
-
-      const pha = outputs.pha;
-      const w = pha.dims[3];
-      const h = pha.dims[2];
-
-      // Post-processing with temporal stabilization (morphology disabled for speed)
-      const processedPha = postProcessMask(pha.data, w, h, false);
-      
-      perfMetrics.total = performance.now() - t0;
-
-      // Send result with detailed metrics
-      self.postMessage(
-        { 
-          type: "result", 
-          pha: processedPha, 
-          shape: pha.dims,
-          metrics: {
-            preprocess: perfMetrics.preprocess,
-            inference: perfMetrics.inference,
-            postprocess: perfMetrics.postprocess,
-            total: perfMetrics.total
-          }
-        },
-        [processedPha.buffer],
-      );
-
-      msg.bitmap.close();
-      isProcessing = false;
-
-      // Process pending frame if exists (pipeline parallelism)
-      if (pendingFrame) {
-        const nextFrame = pendingFrame;
-        pendingFrame = null;
-        self.postMessage({ type: "run", bitmap: nextFrame });
-      }
-
+      processBitmap(msg.bitmap);
       return;
     }
   } catch (error) {
