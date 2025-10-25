@@ -22,6 +22,16 @@ export function useBackgroundReplacement(
   // Оптимизации: пропуск кадров
   let frameSkipCounter = 0;
   const PROCESS_EVERY_N_FRAMES = 1; // Обрабатывать каждый кадр
+  let emaLatencyMs = 25;
+
+  // Параметры модели
+  const targetShort = 480; // Целевое разрешение
+  const downsample = 0.25;
+  const threads = 4;
+
+  // Оптимизации: пропуск кадров
+  let frameSkipCounter = 0;
+  const PROCESS_EVERY_N_FRAMES = 1; // Обрабатывать каждый кадр
   let lastProcessedMask = null;
   let isProcessing = false;
 
