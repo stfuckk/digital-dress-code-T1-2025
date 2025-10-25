@@ -4,6 +4,7 @@ export function useBackgroundReplacement(
   stats,
   props,
 ) {
+  // Worker and runtime state
   let worker = null;
   let isInitialized = false;
   let isReady = false;
@@ -37,7 +38,7 @@ export function useBackgroundReplacement(
     return new Worker(new URL("../workers/rvm.worker.js", import.meta.url), {
       type: "module",
     });
-  };
+  }
 
   const initialize = async () => {
     if (isInitialized) return;
@@ -95,11 +96,10 @@ export function useBackgroundReplacement(
 
       // Инициализация модели
       const modelUrl = "/models/rvm_mobilenetv3_fp32.onnx";
-
       worker.postMessage({
         type: "init",
         modelUrl,
-        downsample,
+        downsample: currentDownsample,
         threads,
       });
 
@@ -110,12 +110,11 @@ export function useBackgroundReplacement(
     }
   };
 
-  // Загрузка фонового изображения
   const loadBackgroundImage = (url) => {
     if (currentPhotoUrl === url && loadedBackgroundImage.value) {
-      return; // Уже загружено
+      return;
     }
-    
+
     currentPhotoUrl = url;
     const img = new Image();
     img.crossOrigin = "anonymous";
@@ -130,87 +129,6 @@ export function useBackgroundReplacement(
     img.src = url;
   };
 
-  const drawUserInfoOnCanvas = (ctx, width, height) => {
-    if (!props.userInfo) return;
-    
-    const { name, position, company, email, telegram, privacyLevel } = props.userInfo;
-    
-    // Позиция текста в левом ВЕРХНЕМ углу
-    const padding = 30;
-    const lineHeight = 45;
-    const smallLineHeight = 30;
-    let yPos = padding + 40; // Начинаем с верха + размер первой строки
-    
-    // Функция для рисования текста с тенью
-    const drawTextWithShadow = (text, x, y, fontSize, color = 'white', weight = '700') => {
-      ctx.font = `${weight} ${fontSize}px 'Segoe UI', sans-serif`;
-      
-      // Тень (несколько слоев для лучшего контраста)
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-      ctx.shadowBlur = 15;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
-      
-      // Обводка
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 4;
-      ctx.strokeText(text, x, y);
-      
-      // Основной текст
-      ctx.fillStyle = color;
-      ctx.shadowBlur = 8;
-      ctx.fillText(text, x, y);
-      
-      // Сбрасываем тень
-      ctx.shadowColor = 'transparent';
-      ctx.shadowBlur = 0;
-    };
-    
-    // МИНИМАЛЬНЫЙ уровень приватности: только ФИО
-    if (privacyLevel === 'minimal') {
-      if (name) {
-        drawTextWithShadow(name, padding, yPos, 40, 'white', '800');
-      }
-      return;
-    }
-    
-    // ВЫСОКИЙ уровень приватности: только компания
-    if (privacyLevel === 'high') {
-      if (company) {
-        drawTextWithShadow(company, padding, yPos, 32, 'white', '700');
-      }
-      return;
-    }
-    
-    // НИЗКИЙ и СРЕДНИЙ уровень: имя, должность, компания
-    if (name) {
-      drawTextWithShadow(name, padding, yPos, 40, 'white', '800');
-      yPos += lineHeight;
-    }
-    
-    if (position) {
-      drawTextWithShadow(position, padding, yPos, 26, '#ffd700', '700');
-      yPos += lineHeight * 0.7;
-    }
-    
-    if (company) {
-      drawTextWithShadow(company, padding, yPos, 20, '#e0e0e0', '600');
-      yPos += smallLineHeight;
-    }
-    
-    // НИЗКИЙ уровень приватности: дополнительно email и telegram
-    if (privacyLevel === 'low') {
-      if (email) {
-        drawTextWithShadow(email, padding, yPos, 18, '#9db4ff', '600');
-        yPos += smallLineHeight;
-      }
-      
-      if (telegram) {
-        drawTextWithShadow(telegram, padding, yPos, 18, '#9db4ff', '600');
-      }
-    }
-  };
-
   const renderMaskToCanvas = (pha, w, h) => {
     if (!outputCanvas.value || !sourceVideo.value) return;
 
@@ -220,42 +138,45 @@ export function useBackgroundReplacement(
 
     if (!videoWidth || !videoHeight) return;
 
-    // Масштабируем canvas под видео
     outputCanvas.value.width = videoWidth;
     outputCanvas.value.height = videoHeight;
 
-    // Рисуем видео
     ctx.drawImage(sourceVideo.value, 0, 0, videoWidth, videoHeight);
 
-    if (props.backgroundEnabled) {
-      // Создаем временный canvas для маски
-      const maskCanvas = document.createElement("canvas");
-      maskCanvas.width = w;
-      maskCanvas.height = h;
-      const maskCtx = maskCanvas.getContext("2d");
-
-      const imageData = maskCtx.createImageData(w, h);
-      const data = imageData.data;
-
-      // Заполняем альфа-канал из маски
-      for (let i = 0; i < w * h; i++) {
-        const alpha = Math.max(0, Math.min(255, Math.round(pha[i] * 255)));
-        data[i * 4] = alpha;
-        data[i * 4 + 1] = alpha;
-        data[i * 4 + 2] = alpha;
-        data[i * 4 + 3] = 255;
-      }
-      maskCtx.putImageData(imageData, 0, 0);
-
-      // Применяем фон (текст уже будет на фоне)
-      applyBackground(ctx, maskCanvas, videoWidth, videoHeight);
-    } else {
-      // Если фон не включен, рисуем текст поверх видео
+    if (!props.backgroundEnabled) {
       drawUserInfoOnCanvas(ctx, videoWidth, videoHeight);
+      return;
     }
+
+    const mask = ensureMaskImageData(maskSurface, w, h);
+    const data = mask.data;
+
+    const SOFT_START = 0.08;
+    const HARD_START = 0.4;
+    for (let i = 0; i < w * h; i++) {
+      let alpha = pha[i];
+      if (alpha <= SOFT_START) {
+        alpha = 0;
+      } else if (alpha >= HARD_START) {
+        alpha = 1;
+      } else {
+        alpha = (alpha - SOFT_START) / (HARD_START - SOFT_START);
+      }
+      const byte = Math.round(alpha * 255);
+      const idx = i * 4;
+      data[idx] = 0;
+      data[idx + 1] = 0;
+      data[idx + 2] = 0;
+      data[idx + 3] = byte;
+    }
+
+    maskSurface.ctx.putImageData(mask, 0, 0);
+    applyBackground(ctx, maskSurface.canvas, videoWidth, videoHeight);
   };
 
   const applyBackground = (ctx, maskCanvas, width, height) => {
+    const bgSurface = ensureCanvas(backgroundSurface, width, height);
+    const bgCtx = bgSurface.ctx;
     const bgType = props.backgroundConfig.type;
 
     // Сохраняем оригинальное видео
@@ -270,8 +191,8 @@ export function useBackgroundReplacement(
     } else if (bgType === "color") {
       // Однотонный цвет
       const color = hexToRgb(props.backgroundConfig.color);
-      ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
-      ctx.fillRect(0, 0, width, height);
+      bgCtx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
+      bgCtx.fillRect(0, 0, width, height);
     } else if (bgType === "photo" && props.backgroundConfig.photo) {
       // Фоновое изображение
       const bgImage = loadedBackgroundImage.value;
@@ -283,11 +204,13 @@ export function useBackgroundReplacement(
         ctx.fillStyle = "#2e2e2e";
         ctx.fillRect(0, 0, width, height);
       }
+    } else {
+      bgCtx.fillStyle = "#111";
+      bgCtx.fillRect(0, 0, width, height);
     }
 
-    // Draw custom drawing on background if enabled
     if (isDrawingEnabled && drawingCanvas) {
-      ctx.drawImage(drawingCanvas, 0, 0, width, height);
+      bgCtx.drawImage(drawingCanvas, 0, 0, width, height);
     }
 
     // РИСУЕМ ТЕКСТ НА ФОНЕ (до наложения человека)
@@ -341,7 +264,11 @@ export function useBackgroundReplacement(
     if (frameSkipCounter % PROCESS_EVERY_N_FRAMES !== 0) {
       // Используем последнюю обработанную маску
       if (lastProcessedMask) {
-        renderMaskToCanvas(lastProcessedMask.pha, lastProcessedMask.w, lastProcessedMask.h);
+        renderMaskToCanvas(
+          lastProcessedMask.pha,
+          lastProcessedMask.w,
+          lastProcessedMask.h,
+        );
       }
       return;
     }
@@ -424,7 +351,8 @@ export function useBackgroundReplacement(
     // Сглаживание с более сильным коэффициентом
     const smoothingFactor = 0.15;
     stats.value.cpu = Math.round(
-      estimatedCPU * smoothingFactor + (stats.value.cpu || 0) * (1 - smoothingFactor),
+      estimatedCPU * smoothingFactor +
+        (stats.value.cpu || 0) * (1 - smoothingFactor),
     );
 
     // GPU (эмуляция)
@@ -434,15 +362,9 @@ export function useBackgroundReplacement(
     }
   };
 
-  const hexToRgb = (hex) => {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    return result
-      ? {
-          r: parseInt(result[1], 16),
-          g: parseInt(result[2], 16),
-          b: parseInt(result[3], 16),
-        }
-      : { r: 0, g: 255, b: 0 };
+    stats.value.downsample = currentDownsample;
+
+    // Fixed resolution mode – no dynamic scaling
   };
 
   const start = () => {
@@ -460,21 +382,190 @@ export function useBackgroundReplacement(
   };
 
   const setDrawingCanvas = (canvas) => {
-    drawingCanvas = canvas;
-    console.log('✓ Drawing canvas set');
+    drawingCanvas = canvas || null;
+    console.log("✓ Drawing canvas set");
   };
 
   const enableDrawing = (enabled) => {
-    isDrawingEnabled = enabled;
-    console.log(`✓ Drawing ${enabled ? 'enabled' : 'disabled'}`);
+    isDrawingEnabled = !!enabled;
+    console.log(`✓ Drawing ${enabled ? "enabled" : "disabled"}`);
   };
 
   const clearDrawing = () => {
     if (drawingCanvas) {
-      const ctx = drawingCanvas.getContext('2d');
+      const ctx = drawingCanvas.getContext("2d");
       ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
-      console.log('✓ Drawing cleared');
+      console.log("✓ Drawing cleared");
     }
+  };
+
+  const syncWorkerDownsample = (force = false) => {
+    if (!worker || !isReady) return;
+    const desired = BASE_DOWNSAMPLE;
+    if (force || Math.abs(desired - currentDownsample) > 1e-6) {
+      currentDownsample = desired;
+      stats.value.downsample = currentDownsample;
+      worker.postMessage({
+        type: "config",
+        downsample: currentDownsample,
+        resetState: true,
+      });
+      lastProcessedMask = null;
+    }
+  };
+
+  function computeDownsampleForShortSide(shortSide) {
+    return BASE_DOWNSAMPLE;
+  }
+
+  function createCanvasCache(useOffscreen = false) {
+    return {
+      useOffscreen,
+      canvas: null,
+      ctx: null,
+      imageData: null,
+    };
+  }
+
+  function ensureCanvas(surface, width, height, contextOptions) {
+    if (!surface.canvas) {
+      surface.canvas = createCanvas(surface.useOffscreen, width, height);
+    }
+
+    if (
+      surface.canvas.width !== width ||
+      surface.canvas.height !== height
+    ) {
+      surface.canvas.width = width;
+      surface.canvas.height = height;
+      surface.imageData = null;
+    }
+
+    if (!surface.ctx) {
+      surface.ctx = surface.canvas.getContext("2d", contextOptions || undefined);
+      if (!surface.ctx) {
+        throw new Error("Не удалось получить контекст Canvas");
+      }
+    }
+
+    surface.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    surface.ctx.clearRect(0, 0, width, height);
+    return surface;
+  }
+
+  function ensureMaskImageData(surface, width, height) {
+    ensureCanvas(surface, width, height, { willReadFrequently: true });
+    if (
+      !surface.imageData ||
+      surface.imageData.width !== width ||
+      surface.imageData.height !== height
+    ) {
+      surface.imageData = surface.ctx.createImageData(width, height);
+    }
+    return surface.imageData;
+  }
+
+  function createCanvas(useOffscreen, width, height) {
+    if (useOffscreen && supportsOffscreenCanvas) {
+      return new OffscreenCanvas(width, height);
+    }
+    if (typeof document === "undefined") {
+      throw new Error("Canvas API недоступна в текущей среде");
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  }
+
+  const drawUserInfoOnCanvas = (ctx, width, height) => {
+    if (!props.userInfo) return;
+
+    const { name, position, company, email, telegram, privacyLevel } =
+      props.userInfo;
+
+    const padding = 30;
+    const lineHeight = 45;
+    const smallLineHeight = 30;
+    let yPos = padding + 40;
+
+    const drawTextWithShadow = (
+      text,
+      x,
+      y,
+      fontSize,
+      color = "white",
+      weight = "700",
+    ) => {
+      ctx.font = `${weight} ${fontSize}px 'Segoe UI', sans-serif`;
+
+      ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+      ctx.shadowBlur = 15;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 4;
+      ctx.strokeText(text, x, y);
+
+      ctx.fillStyle = color;
+      ctx.shadowBlur = 8;
+      ctx.fillText(text, x, y);
+
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    };
+
+    if (privacyLevel === "minimal") {
+      if (name) {
+        drawTextWithShadow(name, padding, yPos, 40, "white", "800");
+      }
+      return;
+    }
+
+    if (privacyLevel === "high") {
+      if (company) {
+        drawTextWithShadow(company, padding, yPos, 32, "white", "700");
+      }
+      return;
+    }
+
+    if (name) {
+      drawTextWithShadow(name, padding, yPos, 40, "white", "800");
+      yPos += lineHeight;
+    }
+
+    if (position) {
+      drawTextWithShadow(position, padding, yPos, 26, "#ffd700", "700");
+      yPos += lineHeight * 0.7;
+    }
+
+    if (company) {
+      drawTextWithShadow(company, padding, yPos, 20, "#e0e0e0", "600");
+      yPos += smallLineHeight;
+    }
+
+    if (privacyLevel === "low") {
+      if (email) {
+        drawTextWithShadow(email, padding, yPos, 18, "#9db4ff", "600");
+        yPos += smallLineHeight;
+      }
+
+      if (telegram) {
+        drawTextWithShadow(telegram, padding, yPos, 18, "#9db4ff", "600");
+      }
+    }
+  };
+
+  const hexToRgb = (hex) => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result
+      ? {
+          r: parseInt(result[1], 16),
+          g: parseInt(result[2], 16),
+          b: parseInt(result[3], 16),
+        }
+      : { r: 0, g: 255, b: 0 };
   };
 
   return {

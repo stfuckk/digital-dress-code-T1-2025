@@ -15,7 +15,7 @@ ___
 
 ---
 
-Стек: Vue 3 + Vite + TensorFlow.js
+Стек: Vue 3 + Vite + ONNX Runtime JS
 
 [![Made with ❤️ for Hackathon](https://img.shields.io/badge/Made%20for-Hackathon-ff69b4.svg)]()
 
@@ -28,13 +28,14 @@ ___
 docker build -t t1-digital-dress-code . &&\
 docker run --name t1-digital-dress-code -p 3333:4173 -d t1-digital-dress-code:latest
 ```
+
 ### Удаление контейнера и образа (очистка):
 ```bash
 docker rm t1-digital-dress-code -f &&\
 docker rmi t1-digital-dress-code:latest
 ```
 
-## Старт со сборкой из исходного кода
+## Старт со сборкой из исходного кода (без Docker)
 
 ### Установка зависимостей
 
@@ -82,8 +83,7 @@ ___
 ## Производительность (заготовка)
 | Режим                 | Устройство | Разрешение | FPS (цель) | Примечания |
 |-----------------------|------------|------------|------------|------------|
-| Fast path        | CPU        | 720p       | XX         | TODO       |
-| Fast path        | GPU        | 1080p      | XX         | TODO       |
-| Quality          | GPU        | 1080p      | XX         | TODO       |
+| Fast path        | i5 12450H (8-cores) CPU        | 720p       | XX         | TODO       |
+
 
 > Заполнить цифры после измерений на целевом железе.
