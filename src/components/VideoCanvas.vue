@@ -233,11 +233,34 @@ const toggleDrawingMode = () => {
 
 const getCoordinates = (e) => {
     const rect = drawingCanvas.value.getBoundingClientRect();
-    const scaleX = drawingCanvas.value.width / rect.width;
-    const scaleY = drawingCanvas.value.height / rect.height;
+    const canvas = drawingCanvas.value;
+    
+    // Учитываем object-fit: contain
+    const canvasRatio = canvas.width / canvas.height;
+    const displayRatio = rect.width / rect.height;
+    
+    let drawWidth, drawHeight, offsetX, offsetY;
+    
+    if (canvasRatio > displayRatio) {
+        // Canvas шире, будут вертикальные полосы
+        drawWidth = rect.width;
+        drawHeight = rect.width / canvasRatio;
+        offsetX = 0;
+        offsetY = (rect.height - drawHeight) / 2;
+    } else {
+        // Canvas выше, будут горизонтальные полосы
+        drawWidth = rect.height * canvasRatio;
+        drawHeight = rect.height;
+        offsetX = (rect.width - drawWidth) / 2;
+        offsetY = 0;
+    }
+    
+    const scaleX = canvas.width / drawWidth;
+    const scaleY = canvas.height / drawHeight;
+    
     return {
-        x: (e.clientX - rect.left) * scaleX,
-        y: (e.clientY - rect.top) * scaleY
+        x: (e.clientX - rect.left - offsetX) * scaleX,
+        y: (e.clientY - rect.top - offsetY) * scaleY
     };
 };
 
@@ -267,27 +290,19 @@ const startDrawingTouch = (e) => {
     e.preventDefault();
     isDrawing.value = true;
     const touch = e.touches[0];
-    const rect = drawingCanvas.value.getBoundingClientRect();
-    const scaleX = drawingCanvas.value.width / rect.width;
-    const scaleY = drawingCanvas.value.height / rect.height;
-    const x = (touch.clientX - rect.left) * scaleX;
-    const y = (touch.clientY - rect.top) * scaleY;
+    const coords = getCoordinates(touch);
     drawingCtx.beginPath();
-    drawingCtx.moveTo(x, y);
+    drawingCtx.moveTo(coords.x, coords.y);
 };
 
 const drawTouch = (e) => {
     if (!isDrawing.value || !isDrawingMode.value) return;
     e.preventDefault();
     const touch = e.touches[0];
-    const rect = drawingCanvas.value.getBoundingClientRect();
-    const scaleX = drawingCanvas.value.width / rect.width;
-    const scaleY = drawingCanvas.value.height / rect.height;
-    const x = (touch.clientX - rect.left) * scaleX;
-    const y = (touch.clientY - rect.top) * scaleY;
+    const coords = getCoordinates(touch);
     drawingCtx.strokeStyle = drawColor.value;
     drawingCtx.lineWidth = brushSize.value;
-    drawingCtx.lineTo(x, y);
+    drawingCtx.lineTo(coords.x, coords.y);
     drawingCtx.stroke();
 };
 
