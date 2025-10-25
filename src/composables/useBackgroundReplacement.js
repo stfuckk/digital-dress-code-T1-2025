@@ -12,6 +12,11 @@ export function useBackgroundReplacement(
   let lastFpsTime = Date.now();
   let fpsFrameCount = 0;
   let emaLatencyMs = 25;
+  let lastFrameTime = Date.now();
+
+  // Рисование
+  let drawingCanvas = null;
+  let drawingCtx = null;
 
   // Параметры модели
   const targetShort = 480; // Целевое разрешение
@@ -207,6 +212,38 @@ export function useBackgroundReplacement(
     }
   };
 
+  // Инициализация canvas для рисования
+  const initDrawingCanvas = (width, height) => {
+    if (!drawingCanvas) {
+      drawingCanvas = document.createElement("canvas");
+      drawingCtx = drawingCanvas.getContext("2d");
+    }
+    
+    // Обновляем размер только если изменился
+    if (drawingCanvas.width !== width || drawingCanvas.height !== height) {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = drawingCanvas.width;
+      tempCanvas.height = drawingCanvas.height;
+      const tempCtx = tempCanvas.getContext("2d");
+      tempCtx.drawImage(drawingCanvas, 0, 0);
+      
+      drawingCanvas.width = width;
+      drawingCanvas.height = height;
+      drawingCtx.clearRect(0, 0, width, height);
+      
+      if (tempCanvas.width > 0 && tempCanvas.height > 0) {
+        drawingCtx.drawImage(tempCanvas, 0, 0, tempCanvas.width, tempCanvas.height, 
+                            0, 0, width, height);
+      }
+    }
+  };
+
+  const clearDrawing = () => {
+    if (drawingCanvas && drawingCtx) {
+      drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+    }
+  };
+
   const renderMaskToCanvas = (pha, w, h) => {
     if (!outputCanvas.value || !sourceVideo.value) return;
 
@@ -219,6 +256,9 @@ export function useBackgroundReplacement(
     // Масштабируем canvas под видео
     outputCanvas.value.width = videoWidth;
     outputCanvas.value.height = videoHeight;
+
+    // Инициализируем canvas для рисования
+    initDrawingCanvas(videoWidth, videoHeight);
 
     // Рисуем видео
     ctx.drawImage(sourceVideo.value, 0, 0, videoWidth, videoHeight);
@@ -248,6 +288,11 @@ export function useBackgroundReplacement(
     } else {
       // Если фон не включен, рисуем текст поверх видео
       drawUserInfoOnCanvas(ctx, videoWidth, videoHeight);
+    }
+
+    // Накладываем рисунок поверх всего
+    if (drawingCanvas) {
+      ctx.drawImage(drawingCanvas, 0, 0);
     }
   };
 
@@ -407,17 +452,23 @@ export function useBackgroundReplacement(
     // Latency
     stats.value.latency = Math.round(emaLatencyMs);
 
-    // CPU (оценка на основе времени обработки)
-    // При 30fps на обработку кадра должно уходить ~33ms
-    // При 60fps на обработку кадра должно уходить ~16ms
-    const targetFrameTime = 1000 / (stats.value.fps || 30);
-    const cpuUsageRatio = Math.min(1, processingTime / targetFrameTime);
-    const estimatedCPU = Math.round(cpuUsageRatio * 100);
+    // CPU (реальная утилизация воркера)
+    // Считаем процент времени, который воркер занят обработкой
+    const currentTime = Date.now();
+    const frameInterval = currentTime - lastFrameTime;
+    lastFrameTime = currentTime;
     
-    // Сглаживание с более сильным коэффициентом
-    const smoothingFactor = 0.15;
+    // Утилизация = время обработки / время между кадрами
+    // Умножаем на коэффициент потоков (обычно используем 4 потока)
+    const workerUtilization = frameInterval > 0 
+      ? Math.min(100, (processingTime / frameInterval) * 100 * 0.3) // 0.3 - поправочный коэффициент
+      : 0;
+    
+    // Сглаживание
+    const smoothingFactor = 0.3;
+    const currentCpu = stats.value.cpu || workerUtilization;
     stats.value.cpu = Math.round(
-      estimatedCPU * smoothingFactor + (stats.value.cpu || 0) * (1 - smoothingFactor),
+      workerUtilization * smoothingFactor + currentCpu * (1 - smoothingFactor),
     );
 
     // GPU (эмуляция)
@@ -452,11 +503,23 @@ export function useBackgroundReplacement(
     stats.value = { cpu: 0, gpu: 0, fps: 0, avgFps: 0, latency: 0 };
   };
 
+  // Функции для рисования
+  const getDrawingContext = () => {
+    return drawingCtx;
+  };
+
+  const getDrawingCanvas = () => {
+    return drawingCanvas;
+  };
+
   return {
     initialize,
     start,
     stop,
     processFrame,
     updateStats: updateFrameStats,
+    clearDrawing,
+    getDrawingContext,
+    getDrawingCanvas,
   };
 }

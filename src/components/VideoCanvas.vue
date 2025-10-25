@@ -7,7 +7,17 @@
             style="display: none"
         ></video>
 
-        <canvas ref="outputCanvas" class="output-canvas"></canvas>
+        <canvas 
+            ref="outputCanvas" 
+            class="output-canvas"
+            @mousedown="startDrawing"
+            @mousemove="draw"
+            @mouseup="stopDrawing"
+            @mouseleave="stopDrawing"
+            @touchstart.prevent="handleTouchStart"
+            @touchmove.prevent="handleTouchMove"
+            @touchend.prevent="stopDrawing"
+        ></canvas>
 
         <!-- Информация о пользователе теперь встроена в canvas -->
 
@@ -46,6 +56,18 @@ const props = defineProps({
             color: "#00ff00",
         }),
     },
+    drawingEnabled: {
+        type: Boolean,
+        default: false,
+    },
+    drawingColor: {
+        type: String,
+        default: "#ff0000",
+    },
+    drawingSize: {
+        type: Number,
+        default: 3,
+    },
 });
 
 const emit = defineEmits(["ready"]);
@@ -67,10 +89,18 @@ const {
     start: startProcessing,
     stop: stopProcessing,
     processFrame,
+    clearDrawing,
+    getDrawingContext,
+    getDrawingCanvas,
 } = useBackgroundReplacement(sourceVideo, outputCanvas, stats, props);
 
 let stream = null;
 let animationId = null;
+
+// Состояние рисования
+let isDrawing = false;
+let lastX = 0;
+let lastY = 0;
 
 const start = async () => {
     try {
@@ -140,6 +170,76 @@ const processLoop = async () => {
     animationId = requestAnimationFrame(processLoop);
 };
 
+// Функции для рисования
+const getCanvasCoordinates = (e) => {
+    const canvas = outputCanvas.value;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY,
+    };
+};
+
+const startDrawing = (e) => {
+    if (!props.drawingEnabled) return;
+    
+    isDrawing = true;
+    const coords = getCanvasCoordinates(e);
+    lastX = coords.x;
+    lastY = coords.y;
+};
+
+const draw = (e) => {
+    if (!isDrawing || !props.drawingEnabled) return;
+    
+    const ctx = getDrawingContext();
+    if (!ctx) return;
+    
+    const coords = getCanvasCoordinates(e);
+    
+    ctx.strokeStyle = props.drawingColor;
+    ctx.lineWidth = props.drawingSize;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    
+    ctx.beginPath();
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(coords.x, coords.y);
+    ctx.stroke();
+    
+    lastX = coords.x;
+    lastY = coords.y;
+};
+
+const stopDrawing = () => {
+    isDrawing = false;
+};
+
+const handleTouchStart = (e) => {
+    if (!props.drawingEnabled || e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    const mouseEvent = new MouseEvent('mousedown', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+    });
+    startDrawing(mouseEvent);
+};
+
+const handleTouchMove = (e) => {
+    if (!props.drawingEnabled || e.touches.length !== 1) return;
+    
+    const touch = e.touches[0];
+    const mouseEvent = new MouseEvent('mousemove', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+    });
+    draw(mouseEvent);
+};
+
 onMounted(() => {
     emit("ready");
 });
@@ -160,6 +260,7 @@ watch(
 defineExpose({
     start,
     stop,
+    clearDrawing,
 });
 </script>
 

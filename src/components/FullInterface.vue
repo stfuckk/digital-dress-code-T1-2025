@@ -164,6 +164,50 @@
                     </div>
                 </div>
 
+                <div class="control-group">
+                    <h3>Рисование</h3>
+                    
+                    <label class="checkbox">
+                        <input type="checkbox" v-model="drawingEnabled" />
+                        <span>Включить рисование</span>
+                    </label>
+
+                    <div v-if="drawingEnabled" class="drawing-controls">
+                        <div>
+                            <label class="label">Цвет пера</label>
+                            <div class="color-row">
+                                <input
+                                    type="color"
+                                    v-model="drawingColor"
+                                    class="color-picker"
+                                />
+                                <span class="color-code">{{ drawingColor }}</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="label"
+                                >Толщина пера: {{ drawingSize }}px</label
+                            >
+                            <input
+                                type="range"
+                                min="1"
+                                max="20"
+                                v-model.number="drawingSize"
+                                class="range"
+                            />
+                        </div>
+
+                        <button
+                            @click="clearDrawingCanvas"
+                            class="btn btn-clear"
+                            :disabled="!isRunning"
+                        >
+                            Очистить рисунок
+                        </button>
+                    </div>
+                </div>
+
                 <div class="action-buttons">
                     <button
                         @click="toggleCamera"
@@ -191,6 +235,9 @@
                     :background-enabled="backgroundEnabled"
                     :background-config="backgroundConfig"
                     :show-stats="true"
+                    :drawing-enabled="drawingEnabled"
+                    :drawing-color="drawingColor"
+                    :drawing-size="drawingSize"
                     @ready="onReady"
                 />
             </section>
@@ -206,6 +253,11 @@ const videoCanvas = ref(null);
 const isRunning = ref(false);
 const backgroundEnabled = ref(true);
 
+// Настройки рисования
+const drawingEnabled = ref(false);
+const drawingColor = ref("#ff0000");
+const drawingSize = ref(3);
+
 // Employee info per JSON + privacy
 const employee = ref({
     full_name: "Иванов Сергей Петрович",
@@ -220,9 +272,9 @@ const privacyLevel = ref("medium");
 
 // humanize helpers via computed
 function humanize(s = "") {
+    // Просто нормализуем пробелы и запятые, без изменения русского текста
     let x = s.replaceAll(",", ", ");
     x = x
-        .replace(/([А-Яа-яЁё])([А-ЯЁ])/g, "$1 $2")
         .replace(/\s{2,}/g, " ")
         .trim();
     return x;
@@ -349,6 +401,13 @@ const toggleCamera = async () => {
         }
     }
 };
+
+const clearDrawingCanvas = () => {
+    if (videoCanvas.value && videoCanvas.value.clearDrawing) {
+        videoCanvas.value.clearDrawing();
+    }
+};
+
 const onReady = () => {};
 const applyPreset = (p) => {
     Object.assign(backgroundConfig.value, p.config);
@@ -557,6 +616,23 @@ const applyPreset = (p) => {
     padding: 0;
     border: 1px solid #2a2b2e;
     border-radius: 6px;
+}
+
+.drawing-controls {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.btn-clear {
+    width: 100%;
+    margin-top: 4px;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 @media (max-width: 1024px) {
