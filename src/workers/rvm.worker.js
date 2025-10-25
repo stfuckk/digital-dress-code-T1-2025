@@ -88,6 +88,46 @@ self.onmessage = async (e) => {
       return;
     }
 
+    if (msg.type === "config") {
+      let updated = false;
+      if (typeof msg.downsample === "number" && !Number.isNaN(msg.downsample)) {
+        const clamped = Math.min(0.6, Math.max(0.12, msg.downsample));
+        if (Math.abs(clamped - downsample) > 1e-3) {
+          downsample = clamped;
+          if (!tensorCache.downsampleBuffer) {
+            tensorCache.downsampleBuffer = new Float32Array([downsample]);
+            tensorCache.downsampleTensor = new Tensor(
+              "float32",
+              tensorCache.downsampleBuffer,
+              [1],
+            );
+          } else {
+            tensorCache.downsampleBuffer[0] = downsample;
+          }
+          updated = true;
+        }
+      }
+
+      if (msg.resetState) {
+        r1 = r2 = r3 = r4 = null;
+        prevMask = null;
+        framesSinceReset = 0;
+        updated = true;
+      }
+
+      if (updated) {
+        console.log(
+          `[Worker] Downsample updated to ${downsample.toFixed(3)}, state reset: ${Boolean(msg.resetState)}`,
+        );
+      }
+
+      self.postMessage({
+        type: "config-ok",
+        config: { downsample, reset: Boolean(msg.resetState) },
+      });
+      return;
+    }
+
     if (msg.type === "run") {
       if (!session) {
         self.postMessage({ type: "error", message: "Session not initialized" });
