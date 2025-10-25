@@ -7,46 +7,32 @@ export function useBackgroundReplacement(
   let worker = null;
   let isInitialized = false;
   let isReady = false;
-  let backendType = 'wasm';
-
-  // Performance & frame pacing
   let frameCount = 0;
   let fpsHistory = [];
   let lastFpsTime = Date.now();
   let fpsFrameCount = 0;
-  let droppedFrames = 0;
-  const TARGET_FPS = 30;
-  const MAX_FRAME_TIME = 33; // ms, for 30 FPS
-  
-  // Optimized model parameters
-  const INFERENCE_SIZE = 320; // Better quality while maintaining speed
-  const downsample = 0.25; // Aggressive downsampling
-  const threads = 4; // Max threads for performance
-  
-  // Drawing on background
-  let drawingCanvas = null;
-  let isDrawingEnabled = false;
-  
-  // Latest mask for reuse
+  let emaLatencyMs = 25;
+
+  // Параметры модели
+  const targetShort = 480; // Целевое разрешение
+  const downsample = 0.25;
+  const threads = 4;
+
+  // Оптимизации: пропуск кадров
+  let frameSkipCounter = 0;
+  const PROCESS_EVERY_N_FRAMES = 1; // Обрабатывать каждый кадр
   let lastProcessedMask = null;
   let isProcessing = false;
 
-  // Background image
+  // Фоновое изображение
   const loadedBackgroundImage = { value: null };
   let currentPhotoUrl = null;
-  
-  
-  // Render dynamic blur background (updates every frame)
-  function renderBlur(ctx, width, height) {
-    const blurAmount = props.backgroundConfig.blurAmount || 15;
-    
-    // Apply blur filter directly to current video frame
-    ctx.filter = `blur(${blurAmount}px)`;
-    ctx.drawImage(sourceVideo.value, 0, 0, width, height);
-    ctx.filter = "none";
-  }
 
-  // Create Web Worker
+  // Drawing on background
+  let drawingCanvas = null;
+  let isDrawingEnabled = false;
+
+  // Создание Web Worker
   const createWorker = () => {
     return new Worker(new URL("../workers/rvm.worker.js", import.meta.url), {
       type: "module",
@@ -57,18 +43,18 @@ export function useBackgroundReplacement(
     if (isInitialized) return;
 
     try {
-      console.log("🚀 Initializing optimized RVM model...");
+      console.log("Загрузка RVM модели...");
 
+      // Создаем воркер
       worker = createWorker();
 
-      // Setup worker message handlers
+      // Настройка обработчиков сообщений от воркера
       worker.onmessage = (e) => {
         const msg = e.data;
 
         if (msg.type === "ready") {
           isReady = true;
-          backendType = msg.config?.backend || 'wasm';
-          console.log(`✓ Model ready! Backend: ${backendType.toUpperCase()}`);
+          console.log("Модель загружена успешно!");
           return;
         }
 
@@ -84,25 +70,30 @@ export function useBackgroundReplacement(
         }
 
         if (msg.type === "result") {
+          // Обработка результата
           const pha = new Float32Array(msg.pha);
           const dims = msg.shape;
-          const h = dims[2], w = dims[3];
-          const metrics = msg.metrics || { total: 0, preprocess: 0, inference: 0, postprocess: 0 };
+          const h = dims[2],
+            w = dims[3];
+          const timeMs = msg.timeMs;
 
-          // Save mask for reuse
+          emaLatencyMs = 0.9 * emaLatencyMs + 0.1 * timeMs;
+
+          // Сохраняем маску для повторного использования
           lastProcessedMask = { pha, w, h };
 
-          // Render to canvas
+          // Рендеринг маски
           renderMaskToCanvas(pha, w, h);
 
-          // Update stats with detailed metrics
-          updateFrameStats(metrics);
+          // Обновление статистики
+          updateFrameStats(timeMs);
           
+          // Разблокируем для следующего кадра
           isProcessing = false;
         }
       };
 
-      // Initialize model
+      // Инициализация модели
       const modelUrl = "/models/rvm_mobilenetv3_fp32.onnx";
 
       worker.postMessage({
@@ -113,9 +104,8 @@ export function useBackgroundReplacement(
       });
 
       isInitialized = true;
-      console.log("✅ Model initialized!");
     } catch (error) {
-      console.error("❌ Model initialization error:", error);
+      console.error("Ошибка загрузки модели:", error);
       throw error;
     }
   };
@@ -268,21 +258,28 @@ export function useBackgroundReplacement(
   const applyBackground = (ctx, maskCanvas, width, height) => {
     const bgType = props.backgroundConfig.type;
 
-    // Save original video
+    // Сохраняем оригинальное видео
     const videoData = ctx.getImageData(0, 0, width, height);
 
-    // Create background
+    // Создаем фон
     if (bgType === "blur") {
-      renderBlur(ctx, width, height);
+      // Размытый фон
+      ctx.filter = `blur(${props.backgroundConfig.blurAmount}px)`;
+      ctx.drawImage(sourceVideo.value, 0, 0, width, height);
+      ctx.filter = "none";
     } else if (bgType === "color") {
+      // Однотонный цвет
       const color = hexToRgb(props.backgroundConfig.color);
       ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
       ctx.fillRect(0, 0, width, height);
     } else if (bgType === "photo" && props.backgroundConfig.photo) {
+      // Фоновое изображение
       const bgImage = loadedBackgroundImage.value;
       if (bgImage && bgImage.complete) {
+        // Рисуем изображение, растягивая на весь canvas
         ctx.drawImage(bgImage, 0, 0, width, height);
       } else {
+        // Fallback на цвет, если изображение не загружено
         ctx.fillStyle = "#2e2e2e";
         ctx.fillRect(0, 0, width, height);
       }
@@ -293,34 +290,36 @@ export function useBackgroundReplacement(
       ctx.drawImage(drawingCanvas, 0, 0, width, height);
     }
 
-    // Draw user info on background (before compositing person)
+    // РИСУЕМ ТЕКСТ НА ФОНЕ (до наложения человека)
     drawUserInfoOnCanvas(ctx, width, height);
 
-    // Save background with text and drawings
+    // Сохраняем фон с текстом
     const bgData = ctx.getImageData(0, 0, width, height);
 
-    // Restore video
+    // Восстанавливаем видео
     ctx.putImageData(videoData, 0, 0);
 
-    // Scale mask to video size with bilinear interpolation
+    // Масштабируем маску до размера видео
     const scaledMaskCanvas = document.createElement("canvas");
     scaledMaskCanvas.width = width;
     scaledMaskCanvas.height = height;
     const scaledMaskCtx = scaledMaskCanvas.getContext("2d");
-    scaledMaskCtx.imageSmoothingEnabled = true;
-    scaledMaskCtx.imageSmoothingQuality = 'high';
     scaledMaskCtx.drawImage(maskCanvas, 0, 0, width, height);
     const maskData = scaledMaskCtx.getImageData(0, 0, width, height);
 
-    // Compositing: blend foreground and background by mask
+    // Композитинг: смешиваем передний план и фон по маске
     const resultData = ctx.createImageData(width, height);
     for (let i = 0; i < width * height; i++) {
       const idx = i * 4;
-      const alpha = maskData.data[idx] / 255;
+      const alpha = maskData.data[idx] / 255; // Нормализуем альфу
 
-      resultData.data[idx] = videoData.data[idx] * alpha + bgData.data[idx] * (1 - alpha);
-      resultData.data[idx + 1] = videoData.data[idx + 1] * alpha + bgData.data[idx + 1] * (1 - alpha);
-      resultData.data[idx + 2] = videoData.data[idx + 2] * alpha + bgData.data[idx + 2] * (1 - alpha);
+      // Смешиваем по альфе
+      resultData.data[idx] =
+        videoData.data[idx] * alpha + bgData.data[idx] * (1 - alpha);
+      resultData.data[idx + 1] =
+        videoData.data[idx + 1] * alpha + bgData.data[idx + 1] * (1 - alpha);
+      resultData.data[idx + 2] =
+        videoData.data[idx + 2] * alpha + bgData.data[idx + 2] * (1 - alpha);
       resultData.data[idx + 3] = 255;
     }
 
@@ -328,24 +327,27 @@ export function useBackgroundReplacement(
   };
 
   const processFrame = async () => {
-    if (!worker || !isReady || !sourceVideo.value || !outputCanvas.value) {
+    if (!worker || !isReady || !sourceVideo.value || !outputCanvas.value)
       return;
-    }
 
-    // Load background image if needed
+    // Загружаем фоновое изображение при необходимости
     if (props.backgroundConfig.type === "photo" && props.backgroundConfig.photo) {
       loadBackgroundImage(props.backgroundConfig.photo);
     }
 
-    // Drop frame if still processing (frame pacing)
-    if (isProcessing) {
-      droppedFrames++;
-      // Reuse last mask
+    frameSkipCounter++;
+    
+    // Пропускаем кадры для оптимизации
+    if (frameSkipCounter % PROCESS_EVERY_N_FRAMES !== 0) {
+      // Используем последнюю обработанную маску
       if (lastProcessedMask) {
         renderMaskToCanvas(lastProcessedMask.pha, lastProcessedMask.w, lastProcessedMask.h);
       }
       return;
     }
+
+    // Не запускаем новую обработку если предыдущая еще идет
+    if (isProcessing) return;
     
     isProcessing = true;
 
@@ -358,52 +360,40 @@ export function useBackgroundReplacement(
       return;
     }
 
-    // Downscale to INFERENCE_SIZE (256-320p) for speed
-    const { w, h } = calcScaledSize(vw, vh, INFERENCE_SIZE);
+    // Вычисляем размер для обработки
+    const { w, h } = calcScaledSize(vw, vh, targetShort);
 
-    // Use OffscreenCanvas and transferToImageBitmap for zero-copy
+    // Создаем OffscreenCanvas для масштабирования
     const offscreen = new OffscreenCanvas(w, h);
     const offscreenCtx = offscreen.getContext("2d");
     offscreenCtx.drawImage(video, 0, 0, w, h);
 
-    // Transfer bitmap to worker (zero-copy transfer)
+    // Отправляем кадр воркеру
     const bitmap = offscreen.transferToImageBitmap();
-    worker.postMessage({ 
-      type: "run", 
-      bitmap
-    }, [bitmap]);
+    worker.postMessage({ type: "run", bitmap }, [bitmap]);
   };
 
   const calcScaledSize = (videoWidth, videoHeight, targetShortSide) => {
-    const aspectRatio = videoWidth / videoHeight;
-    let w, h;
+    let w = videoWidth;
+    let h = videoHeight;
 
     if (videoWidth < videoHeight) {
-      w = targetShortSide;
-      h = Math.round(targetShortSide / aspectRatio);
+      const scale = targetShortSide / videoWidth;
+      w = Math.round(videoWidth * scale);
+      h = Math.round(videoHeight * scale);
     } else {
-      h = targetShortSide;
-      w = Math.round(targetShortSide * aspectRatio);
+      const scale = targetShortSide / videoHeight;
+      w = Math.round(videoWidth * scale);
+      h = Math.round(videoHeight * scale);
     }
-    
     return { w, h };
   };
 
-  const updateFrameStats = (metrics) => {
+  const updateFrameStats = (processingTime) => {
     frameCount++;
     fpsFrameCount++;
 
-    // Update detailed metrics
-    stats.value.metrics = {
-      preprocess: metrics.preprocess || 0,
-      inference: metrics.inference || 0,
-      postprocess: metrics.postprocess || 0,
-      total: metrics.total || 0
-    };
-    stats.value.backend = backendType;
-    stats.value.droppedFrames = droppedFrames;
-
-    // FPS calculation
+    // FPS
     const now = Date.now();
     if (now - lastFpsTime >= 1000) {
       const fps = fpsFrameCount;
@@ -423,19 +413,25 @@ export function useBackgroundReplacement(
       lastFpsTime = now;
     }
 
-    // Legacy stats for compatibility
-    stats.value.latency = Math.round(metrics.total || 0);
-    
-    const targetFrameTime = 1000 / TARGET_FPS;
-    const cpuUsageRatio = Math.min(1, (metrics.total || 0) / targetFrameTime);
+    // Latency
+    stats.value.latency = Math.round(emaLatencyMs);
+
+    // CPU (оценка на основе времени обработки)
+    const targetFrameTime = 1000 / (stats.value.fps || 30);
+    const cpuUsageRatio = Math.min(1, processingTime / targetFrameTime);
     const estimatedCPU = Math.round(cpuUsageRatio * 100);
     
+    // Сглаживание с более сильным коэффициентом
     const smoothingFactor = 0.15;
     stats.value.cpu = Math.round(
       estimatedCPU * smoothingFactor + (stats.value.cpu || 0) * (1 - smoothingFactor),
     );
 
-    stats.value.gpu = Math.min(100, Math.round(Math.random() * 30 + 15));
+    // GPU (эмуляция)
+    if (stats.value.fps > 0) {
+      const estimatedGPU = Math.min(100, Math.round(Math.random() * 30 + 15));
+      stats.value.gpu = estimatedGPU;
+    }
   };
 
   const hexToRgb = (hex) => {
@@ -450,29 +446,18 @@ export function useBackgroundReplacement(
   };
 
   const start = () => {
-    console.log("✓ Processing started");
+    console.log("Обработка запущена");
   };
 
   const stop = () => {
-    console.log("✓ Processing stopped");
+    console.log("Обработка остановлена");
     if (worker) {
       worker.postMessage({ type: "reset" });
     }
     frameCount = 0;
     fpsHistory = [];
-    droppedFrames = 0;
-    stats.value = { 
-      cpu: 0, 
-      gpu: 0, 
-      fps: 0, 
-      avgFps: 0, 
-      latency: 0,
-      metrics: { preprocess: 0, inference: 0, postprocess: 0, total: 0 },
-      backend: backendType,
-      droppedFrames: 0
-    };
+    stats.value = { cpu: 0, gpu: 0, fps: 0, avgFps: 0, latency: 0 };
   };
-
 
   const setDrawingCanvas = (canvas) => {
     drawingCanvas = canvas;

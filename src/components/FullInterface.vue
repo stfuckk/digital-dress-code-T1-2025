@@ -164,29 +164,7 @@
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <h3>Режим производительности</h3>
-                    <div class="radio-row">
-                        <label class="radio">
-                            <input
-                                type="radio"
-                                value="turbo"
-                                v-model="performanceMode"
-                                @change="setPerformanceMode"
-                            />
-                            ⚡ Турбо (FPS)
-                        </label>
-                        <label class="radio">
-                            <input
-                                type="radio"
-                                value="quality"
-                                v-model="performanceMode"
-                                @change="setPerformanceMode"
-                            />
-                            🎨 Качество
-                        </label>
-                    </div>
-                </div>
+                
 
                 <div class="action-buttons">
                     <button
@@ -245,12 +223,8 @@ const privacyLevel = ref("medium");
 
 // humanize helpers via computed
 function humanize(s = "") {
-    let x = s.replaceAll(",", ", ");
-    x = x
-        .replace(/([А-Яа-яЁё])([А-ЯЁ])/g, "$1 $2")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-    return x;
+    // Просто возвращаем текст как есть, без обработки
+    return s.trim();
 }
 const fullNameC = computed({
     get: () => humanize(employee.value.full_name),
