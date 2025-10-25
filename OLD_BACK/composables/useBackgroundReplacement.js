@@ -28,10 +28,6 @@ export function useBackgroundReplacement(
   const loadedBackgroundImage = { value: null };
   let currentPhotoUrl = null;
 
-  // Drawing state
-  let drawingCanvas = null;
-  let isDrawingEnabled = false;
-
   // Создание Web Worker
   const createWorker = () => {
     return new Worker(new URL("../workers/rvm.worker.js", import.meta.url), {
@@ -253,11 +249,6 @@ export function useBackgroundReplacement(
       // Если фон не включен, рисуем текст поверх видео
       drawUserInfoOnCanvas(ctx, videoWidth, videoHeight);
     }
-
-    // Накладываем рисунки поверх всего
-    if (isDrawingEnabled && drawingCanvas) {
-      ctx.drawImage(drawingCanvas, 0, 0, videoWidth, videoHeight);
-    }
   };
 
   const applyBackground = (ctx, maskCanvas, width, height) => {
@@ -461,30 +452,11 @@ export function useBackgroundReplacement(
     stats.value = { cpu: 0, gpu: 0, fps: 0, avgFps: 0, latency: 0 };
   };
 
-  // Drawing functions
-  const setDrawingCanvas = (canvas) => {
-    drawingCanvas = canvas;
-  };
-
-  const enableDrawing = (enabled) => {
-    isDrawingEnabled = enabled;
-  };
-
-  const clearDrawing = () => {
-    if (drawingCanvas) {
-      const ctx = drawingCanvas.getContext('2d');
-      ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
-    }
-  };
-
   return {
     initialize,
     start,
     stop,
     processFrame,
     updateStats: updateFrameStats,
-    setDrawingCanvas,
-    enableDrawing,
-    clearDrawing,
   };
 }
