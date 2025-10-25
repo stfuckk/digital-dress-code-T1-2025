@@ -15,7 +15,7 @@ ___
 
 ---
 
-Стек: Vue 3 + Vite + ONNX Runtime JS
+Стек: Vue 3 + Vite + ONNX Runtime + MobileNetV3 Segmantation Model
 
 [![Made with ❤️ for Hackathon](https://img.shields.io/badge/Made%20for-Hackathon-ff69b4.svg)]()
 
