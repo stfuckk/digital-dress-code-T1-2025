@@ -20,13 +20,17 @@ export function useBackgroundReplacement(
 
   // Оптимизации: пропуск кадров
   let frameSkipCounter = 0;
-  const PROCESS_EVERY_N_FRAMES = 1; // Обрабатывать каждый 2-й кадр
+  const PROCESS_EVERY_N_FRAMES = 1; // Обрабатывать каждый кадр
   let lastProcessedMask = null;
   let isProcessing = false;
 
   // Фоновое изображение
   const loadedBackgroundImage = { value: null };
   let currentPhotoUrl = null;
+
+  // Drawing on background
+  let drawingCanvas = null;
+  let isDrawingEnabled = false;
 
   // Создание Web Worker
   const createWorker = () => {
@@ -61,6 +65,7 @@ export function useBackgroundReplacement(
         if (msg.type === "error") {
           console.error("Worker error:", msg.message);
           stats.value.error = msg.message;
+          isProcessing = false;
           return;
         }
 
@@ -89,7 +94,6 @@ export function useBackgroundReplacement(
       };
 
       // Инициализация модели
-      // URL модели - нужно скачать с GitHub
       const modelUrl = "/models/rvm_mobilenetv3_fp32.onnx";
 
       worker.postMessage({
@@ -281,6 +285,11 @@ export function useBackgroundReplacement(
       }
     }
 
+    // Draw custom drawing on background if enabled
+    if (isDrawingEnabled && drawingCanvas) {
+      ctx.drawImage(drawingCanvas, 0, 0, width, height);
+    }
+
     // РИСУЕМ ТЕКСТ НА ФОНЕ (до наложения человека)
     drawUserInfoOnCanvas(ctx, width, height);
 
@@ -408,8 +417,6 @@ export function useBackgroundReplacement(
     stats.value.latency = Math.round(emaLatencyMs);
 
     // CPU (оценка на основе времени обработки)
-    // При 30fps на обработку кадра должно уходить ~33ms
-    // При 60fps на обработку кадра должно уходить ~16ms
     const targetFrameTime = 1000 / (stats.value.fps || 30);
     const cpuUsageRatio = Math.min(1, processingTime / targetFrameTime);
     const estimatedCPU = Math.round(cpuUsageRatio * 100);
@@ -452,11 +459,31 @@ export function useBackgroundReplacement(
     stats.value = { cpu: 0, gpu: 0, fps: 0, avgFps: 0, latency: 0 };
   };
 
+  const setDrawingCanvas = (canvas) => {
+    drawingCanvas = canvas;
+    console.log('✓ Drawing canvas set');
+  };
+
+  const enableDrawing = (enabled) => {
+    isDrawingEnabled = enabled;
+    console.log(`✓ Drawing ${enabled ? 'enabled' : 'disabled'}`);
+  };
+
+  const clearDrawing = () => {
+    if (drawingCanvas) {
+      const ctx = drawingCanvas.getContext('2d');
+      ctx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+      console.log('✓ Drawing cleared');
+    }
+  };
+
   return {
     initialize,
     start,
     stop,
     processFrame,
-    updateStats: updateFrameStats,
+    setDrawingCanvas,
+    enableDrawing,
+    clearDrawing,
   };
 }
