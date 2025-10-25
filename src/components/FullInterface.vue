@@ -164,6 +164,8 @@
                     </div>
                 </div>
 
+                
+
                 <div class="action-buttons">
                     <button
                         @click="toggleCamera"
@@ -205,6 +207,7 @@ import VideoCanvas from "./VideoCanvas.vue";
 const videoCanvas = ref(null);
 const isRunning = ref(false);
 const backgroundEnabled = ref(true);
+const performanceMode = ref('turbo'); // По умолчанию турбо-режим
 
 // Employee info per JSON + privacy
 const employee = ref({
@@ -220,12 +223,8 @@ const privacyLevel = ref("medium");
 
 // humanize helpers via computed
 function humanize(s = "") {
-    let x = s.replaceAll(",", ", ");
-    x = x
-        .replace(/([А-Яа-яЁё])([А-ЯЁ])/g, "$1 $2")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-    return x;
+    // Просто возвращаем текст как есть, без обработки
+    return s.trim();
 }
 const fullNameC = computed({
     get: () => humanize(employee.value.full_name),
@@ -333,6 +332,18 @@ const presets = [
         privacy: "medium",
     },
 ];
+
+const setPerformanceMode = () => {
+    if (!videoCanvas.value) return;
+    
+    if (performanceMode.value === 'turbo') {
+        videoCanvas.value.setTurboMode && videoCanvas.value.setTurboMode(true);
+        console.log('⚡ Переключено в турбо-режим');
+    } else {
+        videoCanvas.value.setQualityMode && videoCanvas.value.setQualityMode(true);
+        console.log('🎨 Переключено в режим качества');
+    }
+};
 
 const toggleCamera = async () => {
     if (!videoCanvas.value) return;
